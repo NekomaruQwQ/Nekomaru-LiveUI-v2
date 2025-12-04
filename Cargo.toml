@@ -1,0 +1,128 @@
+[package]
+name = "LiveUI"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+euclid = "0.22.11"
+tap = "1.0.1"
+
+approx = "0.5.1"
+bitflags = "2.10.0"
+bytemuck = { version = "1.24.0", features = ["derive", "const_zeroed"] }
+glam = { version = "0.30.9", features = ["approx", "bytemuck", "glam-assert"] }
+cfg-if = "1.0.4"
+log = "0.4.29"
+ordered-float = "5.1.0"
+pollster = "0.4.0"
+pretty_env_logger = "0.5.0"
+rand = "0.9.2"
+winit = { version = "0.30.9", default-features = false, features = ["rwh_06"] }
+
+egui = "0.33.2"
+egui-directx11 = "0.12.1"
+
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+]}
+
+[lints.clippy]
+cargo       = { level = "warn", priority = -1 }
+nursery     = { level = "warn", priority = -1 }
+pedantic    = { level = "warn", priority = -1 }
+restriction = { level = "warn", priority = -1 }
+
+# #I-language cargo
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow" # can be fixed using `allowed-duplicate-crates`
+
+# I-language #restriction
+arbitrary_source_item_ordering = "allow"
+as_conversions = "allow"
+blanket_clippy_restriction_lints = "allow"
+exhaustive_structs = "allow"
+exhaustive_enums = "allow"
+expect_used = "allow"
+implicit_return = "allow"
+indexing_slicing = "allow"
+let_underscore_must_use = "allow" # allows ignoring results of functions marked `#[must_use]`
+let_underscore_untyped = "allow"
+missing_docs_in_private_items = "allow"
+missing_inline_in_public_items = "allow"
+missing_trait_methods = "allow"
+panic = "allow"
+print_stdout = "allow"
+print_stderr = "allow"
+pub_use = "allow"
+question_mark_used = "allow"
+ref_patterns = "allow"
+self_named_module_files = "allow"
+shadow_reuse = "allow"
+shadow_same = "allow"
+shadow_unrelated = "allow"
+single_call_fn = "allow"
+single_char_lifetime_names = "allow"
+std_instead_of_alloc = "allow"
+std_instead_of_core = "allow"
+wildcard_enum_match_arm = "allow"
+unwrap_used = "allow"
+
+# II-language-arithmetic-and-casting #pedantic
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+
+# II-language-arithmetic-and-casting #restriction
+arithmetic_side_effects = "allow"
+float_arithmetic = "allow"
+float_cmp = "allow"
+integer_division = "allow"
+integer_division_remainder_used = "allow"
+modulo_arithmetic = "allow"
+
+# III-conflicting-lints #complexity
+needless_borrowed_reference = "allow" # or: `clippy::pattern_type_mismatch`
+
+# III-conflicting-lints #style
+needless_else = "allow" # or: `clippy::else_if_without_else`
+
+# III-conflicting-lints #restriction
+pub_with_shorthand = "allow"  # xor: `clippy::pub_without_shorthand`
+semicolon_outside_block = "allow"  # xor: `clippy::semicolon_inside_block`
+unseparated_literal_suffix = "allow"  # xor: `clippy::separated_literal_suffix`
+
+# IV-code-style #style
+doc_overindented_list_items = "allow" # allows using 4 spaces for indenting docs
+manual_range_contains = "allow" # makes graphics code less noisy
+match_ref_pats = "allow" # just looks cool XD
+
+# IV-code-style #nursery
+suboptimal_flops = "allow" # makes graphics code less noisy
+
+# IV-code-style #pedantic
+if_not_else = "allow" # helps clarity in many cases
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow" # e.g.: `winit::window::WindowBuilder`
+must_use_candidate = "allow"
+wildcard_imports = "allow"
+
+# IV-code-style #restriction
+as_underscore = "allow"
+absolute_paths = "allow"
+min_ident_chars = "allow"
+mod_module_files = "allow"
+multiple_inherent_impl = "allow"
+try_err ="allow"
+undocumented_unsafe_blocks = "allow"
+
+# V-fast-prototyping #restriction
+allow_attributes_without_reason = "allow"
+missing_assert_message = "allow"
