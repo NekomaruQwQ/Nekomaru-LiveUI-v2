@@ -1,0 +1,17 @@
+{
+    "private": true,
+    "overrides": {
+        "react@*": "npm:@preact/compat@^10.27.2",
+        "react-dom@*": "npm:@preact/compat@^10.27.2"
+    },
+    "dependencies": {
+        "@emotion/css": "^11.13.5",
+        "@fluentui/react-components": "^9.72.7",
+        "normalize.css": "^8.0.1",
+        "preact": "^10.27.2"
+    },
+    "devDependencies": {
+        "@preact/preset-vite": "^2.10.2",
+        "vite": "^7.2.2"
+    }
+}
