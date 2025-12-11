@@ -1,4 +1,13 @@
-# Proposal of Change: Windows Media Foundation H.264 Video Streaming
+# [ARCHIVED] Original Proposal: Windows Media Foundation H.264 Video Streaming
+
+> **📦 ARCHIVED DOCUMENT**
+>
+> This document contains the **original design proposal** from before implementation began.
+> The **actual implementation** differs significantly. For current status, see [`README.md`](./README.md).
+>
+> **Historical Value**: Useful for understanding alternative architectures we considered (event-driven vs bakery model).
+
+---
 
 ## Executive Summary
 
