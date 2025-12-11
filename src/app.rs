@@ -213,8 +213,19 @@ impl LiveApp {
                     let source_texture =
                         self.main_capture.frame_buffer();
 
-                    // Debug: Log texture pointer to verify it's changing
-                    log::trace!("Captured texture: {:p}", source_texture.as_raw());
+                    let viewport = D3D11_VIEWPORT {
+                        TopLeftX: 0.0,
+                        TopLeftY: 0.0,
+                        Width: Self::STREAM_FRAME_SIZE.width as f32,
+                        Height: Self::STREAM_FRAME_SIZE.height as f32,
+                        MinDepth: 0.0,
+                        MaxDepth: 1.0,
+                    };
+                    unsafe {
+                        self.device_context
+                            .RSSetViewports(Some(&[viewport]));                        
+                    }
+                    
                     let source_view =
                         out_var_or_err(|out| api_call!(unsafe {
                             self.device.CreateShaderResourceView(
