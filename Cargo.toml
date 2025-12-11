@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies.nkcore]
-git = "git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git"
+git = "ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git"
 branch = "main"
 
-# [dependencies.ngd3dcompile]
-# git = "git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git"
-# branch = "main"
-# package = "ngd3dcompile_macro"
+ [dependencies.ngd3dcompile]
+ git = "ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git"
+ branch = "main"
+ package = "ngd3dcompile_macro"
 
 [dependencies]
 # bytemuck = { version = "1.24.0", features = ["derive", "const_zeroed"] }
@@ -24,7 +24,7 @@ pretty_env_logger = "0.5.0"
 serde_json = "1"   # JSON serialization for protocol responses
 widestring = "1.2.1"
 
-#ffmpeg-next = "8.0.0"
+# ffmpeg-next = { version = "8.0.0", features = ["static"] }
 
 # egui = "0.33.2"
 # egui-winit = "0.33.2"
@@ -33,7 +33,8 @@ widestring = "1.2.1"
 winit = { version = "0.30.9", default-features = false, features = ["rwh_06"] }
 wry = { version = "0.53.5", default-features = false, features = ["devtools", "protocol"] }
 
-windows = { version = "0.62.2", features = [
+# LOCK: wry@0.53.5 depends on windows@0.61.3.
+windows = { version = "0.61.3", features = [
     "Graphics_Capture",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",

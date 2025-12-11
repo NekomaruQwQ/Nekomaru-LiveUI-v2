@@ -3,15 +3,14 @@ use nkcore::*;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::EventLoop,
     event_loop::ActiveEventLoop,
     raw_window_handle::HasWindowHandle as _,
     raw_window_handle::RawWindowHandle,
     window::Window,
     window::WindowId,
-    window::WindowButtons,
 };
 
+use windows::core::Interface as _;
 use windows::{
     Win32::Foundation::*,
     Win32::Graphics::{
@@ -45,6 +44,8 @@ pub fn create_device() -> anyhow::Result<(IDXGIFactory6, ID3D11Device, ID3D11Dev
             &dxgi_adapter,
             D3D_DRIVER_TYPE_UNKNOWN,
             HMODULE::default(),
+            D3D11_CREATE_DEVICE_VIDEO_SUPPORT |
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT |
             cfg!(debug_assertions)
                 .then_some(D3D11_CREATE_DEVICE_DEBUG)
                 .unwrap_or_default(),
@@ -61,6 +62,10 @@ pub fn create_device() -> anyhow::Result<(IDXGIFactory6, ID3D11Device, ID3D11Dev
     let device_context =
         device_context
             .ok_or_else(|| anyhow::anyhow!("failed to create D3D11 device context"))?;
+
+    let multithread = api_call!(unsafe { device.cast::<ID3D11Multithread>() })?;
+    let _ = unsafe { multithread.SetMultithreadProtected(true) };
+
     Ok((dxgi_factory, device, device_context))
 }
 

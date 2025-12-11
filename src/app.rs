@@ -2,7 +2,8 @@ mod helper;
 use helper::*;
 
 use crate::capture::CaptureSession;
-use crate::encoding_thread::{EncodingThread, CaptureFrame};
+use crate::encoding_thread::EncodingThread;
+use crate::encoding_thread::CaptureFrame;
 use crate::stream::StreamManager;
 
 use nkcore::euclid::*;
@@ -10,30 +11,28 @@ use nkcore::*;
 
 use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-use wry::{WebView, WebViewBuilder};
+use wry::WebView;
+use wry::WebViewBuilder;
 
 use winit::{
-    dpi::LogicalSize,
     dpi::PhysicalSize,
     event::WindowEvent,
     event_loop::EventLoop,
     event_loop::ActiveEventLoop,
-    raw_window_handle::HasWindowHandle as _,
-    raw_window_handle::RawWindowHandle,
     window::Window,
     window::WindowId,
     window::WindowButtons,
 };
 
 use windows::core::*;
-use windows::Win32::Graphics::{
-    Dxgi::*,
-    Dxgi::Common::*,
-    Direct3D::*,
-    Direct3D11::*,
-};
+use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Direct3D11::*;
+
+use crate::resample::ResamplePass;
 
 pub fn run() {
     EventLoop::<()>::new()
@@ -44,41 +43,60 @@ pub fn run() {
 
 #[expect(dead_code, reason = "to keep various resources alive")]
 struct LiveApp {
-    main_capture: Option<CaptureSession>,
+    main_capture: CaptureSession,
 
     // Encoding pipeline
-    encoding_thread: Option<EncodingThread>,
+    encoding_thread: EncodingThread,
     stream_manager: Arc<StreamManager>,
 
-    // Staging texture for copying captured frames
-    staging_texture: ID3D11Texture2D,
+    // D3D11 device and context
     device: ID3D11Device,
     device_context: ID3D11DeviceContext,
 
+    // Staging texture for copying captured frames
+    staging_texture: ID3D11Texture2D,
+    staging_texture_rtv: ID3D11RenderTargetView,
+    resample_pass: ResamplePass,
+
     frontend_window: Window,
     frontend_webview: WebView,
-    frontend_capture: CaptureSession,
 
-    control_window: Window,
-    output_window: Window,
+    // control_window: Window,
 }
 
 impl LiveApp {
+    const STREAM_SIZE: Size2D<u32> = Size2D::new(1920, 1200);
+
     fn new(event_loop: &ActiveEventLoop) -> anyhow::Result<Self> {
         use windows::Win32::UI::WindowsAndMessaging::FindWindowA;
 
         let (dxgi_factory, device, device_context) =
             create_device()
                 .context("failed to create graphics context")?;
+        let resample_pass =
+            ResamplePass::new(&device)
+                .context("failed to create resample pass")?;
+        // Create staging texture for copying captured frames
+        let staging_texture =
+            create_staging_texture(&device, Self::STREAM_SIZE)
+                .context("failed to create staging texture")?;
+        let staging_texture_rtv =
+            out_var_or_err(|out| api_call!(unsafe {
+                device.CreateRenderTargetView(
+                    &staging_texture,
+                    None,
+                    Some(out))
+            }))?.ok_or_else(|| anyhow::anyhow!("failed to create RTV for staging texture"))?;
 
+        // Start main capture session (capture LiveUI window)
         let main_capture_target = api_call!(unsafe {
             FindWindowA(
                 PCSTR::default(),
                 PCSTR(c"Nekomaru LiveUI v1".as_ptr().cast()))
-        })?;;
-        let main_capture = Some(
+        })?;
+        let main_capture =
             CaptureSession::capture_window(&device, &device_context, main_capture_target)
-                .context("failed to start main capture session")?);
+                .context("failed to start main capture session")?;
 
         // Create stream manager (shared between encoding thread and protocol handler)
         let stream_manager = Arc::new(StreamManager::new(60));  // 60 frame buffer (~1 second)
@@ -104,93 +122,74 @@ impl LiveApp {
                 .build(&frontend_window)
                 .context("failed to create webview for frontend window")?;
 
-        let frontend_hwnd =
-            get_hwnd_from_window(&frontend_window)
-                .context("failed to get window handle for frontend window")?;
-        let frontend_capture =
-            CaptureSession::capture_window(
-                &device,
-                &device_context,
-                frontend_hwnd)
-                .context("failed to start capture session for frontend window")?;
-
-        // Create staging texture for copying captured frames
-        let frame_size = frontend_capture.frame_buffer_size();
-        let staging_texture = create_staging_texture(&device, frame_size)
-            .context("failed to create staging texture")?;
 
         // Start encoding thread
-        let encoding_thread = EncodingThread::new(
-            device.clone(),
-            device_context.clone(),
-            frame_size,
-            Arc::clone(&stream_manager))
+        let encoding_thread =
+            EncodingThread::new(
+                device.clone(),
+                device_context.clone(),
+                Self::STREAM_SIZE,
+                Arc::clone(&stream_manager))
             .context("failed to create encoding thread")?;
 
-        let control_window = api_call! {
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("Nekomaru LiveUI Control Panel")
-                    .with_inner_size(LogicalSize::<u32>::new(960, 600))
-                    .with_resizable(false)
-                    .with_enabled_buttons(WindowButtons::CLOSE))
-        }?;
-
-        let output_window = api_call! {
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("Nekomaru LiveUI Renderer Output")
-                    .with_inner_size(PhysicalSize::<u32>::new(1920, 1080))
-                    .with_resizable(false)
-                    .with_enabled_buttons(WindowButtons::CLOSE))
-        }?;
-
-        control_window.set_visible(false); // currently not used
+        // let control_window = api_call! {
+        //     event_loop.create_window(
+        //         Window::default_attributes()
+        //             .with_title("Nekomaru LiveUI Control Panel")
+        //             .with_inner_size(LogicalSize::<u32>::new(960, 600))
+        //             .with_resizable(false)
+        //             .with_enabled_buttons(WindowButtons::CLOSE))
+        // }?;
 
         Ok(Self {
             main_capture,
-            encoding_thread: Some(encoding_thread),
+            encoding_thread,
             stream_manager,
+            device,
+            device_context,
+            resample_pass,
             staging_texture,
-            device: device.clone(),
-            device_context: device_context.clone(),
+            staging_texture_rtv,
             frontend_window,
             frontend_webview,
-            frontend_capture,
-            control_window,
-            output_window,
         })
     }
 
     fn on_window_event(&mut self, window_id: WindowId, event: WindowEvent) {
         match window_id {
             id if id == self.frontend_window.id() => {
-                self.frontend_capture.update();
+                self.main_capture.update();
 
                 // Copy frame and send to encoding thread
-                if let Some(ref encoding_thread) = self.encoding_thread {
-                    let source_texture = self.frontend_capture.frame_buffer();
+                let source_texture = self.main_capture.frame_buffer();
+                let source_view =
+                    out_var_or_err(|out| api_call!(unsafe {
+                        self.device.CreateShaderResourceView(
+                            source_texture,
+                            None,
+                            Some(out))
+                    }))
+                        .expect("failed to create shader view")
+                        .expect("failed to create shader view");
+                self.resample_pass.resample(
+                    &self.device_context,
+                    &source_view,
+                    &self.staging_texture_rtv);
 
-                    // Copy to staging texture (fast GPU operation ~0.1-0.5ms)
-                    unsafe {
-                        self.device_context.CopyResource(&self.staging_texture, source_texture);
+                // Get timestamp
+                let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => duration.as_micros() as u64,
+                    Err(e) => {
+                        log::warn!("System time error: {e:?}");
+                        0  // Fallback to 0, encoder will still work
                     }
+                };
 
-                    // Get timestamp
-                    let timestamp = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                        Ok(duration) => duration.as_micros() as u64,
-                        Err(e) => {
-                            log::warn!("System time error: {e:?}");
-                            0  // Fallback to 0, encoder will still work
-                        }
-                    };
-
-                    // Send to encoding thread (non-blocking)
-                    encoding_thread.send_frame(CaptureFrame {
-                        texture: self.staging_texture.clone(),
-                        timestamp_us: timestamp,
-                    });
-                }
+                // Send to encoding thread (non-blocking)
+                self.encoding_thread.send_frame(CaptureFrame {
+                    texture: self.staging_texture.clone(),
+                    timestamp_us: timestamp,
+                });
             }
             _ => {}
         }
@@ -208,7 +207,9 @@ fn create_staging_texture(device: &ID3D11Device, size: Size2D<u32>)
         Format: DXGI_FORMAT_B8G8R8A8_UNORM,  // Match capture format
         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
         Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: 0,
+        BindFlags:
+            D3D11_BIND_RENDER_TARGET.0 as u32 |
+                D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: 0,
         MiscFlags: 0,
     };
