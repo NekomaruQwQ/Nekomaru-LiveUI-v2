@@ -153,9 +153,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.48"
+version = "1.2.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c481bdbf0ed3b892f6f806287d72acd515b352a4ec27a208489b8c1bc839633a"
+checksum = "90583009037521a116abf44494efecd645ba48b6622457080f080b85544e2215"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -786,9 +786,9 @@ checksum = "7aedcccd01fc5fe81e6b489c15b247b8b0690feb23304303a9e560f37efc560a"
 
 [[package]]
 name = "icu_properties"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e93fcd3157766c0c8da2f8cff6ce651a31f0810eaa1c51ec363ef790bbb5fb99"
+checksum = "020bfc02fe870ec3a66d93e677ccca0562506e5872c650f893269e08615d74ec"
 dependencies = [
  "icu_collections",
  "icu_locale_core",
@@ -800,9 +800,9 @@ dependencies = [
 
 [[package]]
 name = "icu_properties_data"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02845b3647bb045f1100ecd6480ff52f34c35f82d9880e029d329c21d1054899"
+checksum = "616c294cf8d725c6afcd8f55abc17c56464ef6211f9ed59cccffe534129c77af"
 
 [[package]]
 name = "icu_provider"
@@ -1069,7 +1069,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 [[package]]
 name = "ngd3dcompile"
 version = "0.1.0"
-source = "git+ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
+source = "git+git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
 dependencies = [
  "windows 0.62.2",
 ]
@@ -1077,7 +1077,7 @@ dependencies = [
 [[package]]
 name = "ngd3dcompile_macro"
 version = "0.1.0"
-source = "git+ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
+source = "git+git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
 dependencies = [
  "darling 0.21.3",
  "ngd3dcompile",
@@ -1090,7 +1090,7 @@ dependencies = [
 [[package]]
 name = "nkcore"
 version = "0.1.0"
-source = "git+ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
+source = "git+git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
 dependencies = [
  "anyhow",
  "euclid",
@@ -1102,7 +1102,7 @@ dependencies = [
 [[package]]
 name = "nkcore-macros"
 version = "0.1.0"
-source = "git+ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
+source = "git+git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git?branch=main#cc07103a569f33177ce733406cc14b010ca69aa3"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -2278,9 +2278,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.23.7"
+version = "0.23.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6485ef6d0d9b5d0ec17244ff7eb05310113c3f316f2d14200d4de56b3cb98f8d"
+checksum = "5d7cbc3b4b49633d57a0509303158ca50de80ae32c265093b24c414705807832"
 dependencies = [
  "indexmap",
  "toml_datetime",

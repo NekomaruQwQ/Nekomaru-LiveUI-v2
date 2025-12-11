@@ -1,8 +1,7 @@
-#![expect(clippy::multiple_unsafe_ops_per_block)]
-
 use nkcore::euclid::*;
+use nkcore::tap::*;
 use nkcore::*;
-
+use nkcore::anyhow::anyhow;
 use windows::core::Interface as _;
 use windows::{
     Graphics::*,
@@ -18,129 +17,106 @@ use windows::{
 };
 
 pub struct CaptureSession {
-    device: ID3D11Device,
-    device_context: ID3D11DeviceContext,
-    frame_texture: ID3D11Texture2D,
+    d3d11_device: ID3D11Device,
     winrt_device: IDirect3DDevice,
     frame_pool: Direct3D11CaptureFramePool,
     frame_pool_size: SizeInt32,
 
-    _session: GraphicsCaptureSession, // The GraphicsCaptureSession object must be kept alive.
+    #[expect(unused, reason = "To keep the GraphicsCaptureSession object alive")]
+    session: GraphicsCaptureSession,
 }
 
 impl CaptureSession {
-    pub fn new(
-        device: &ID3D11Device,
-        device_context: &ID3D11DeviceContext,
-        capture_item: &GraphicsCaptureItem)
-        -> anyhow::Result<Self> {
-        let frame_texture =
-            Self::create_texture(
-                device,
-                DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
-                SizeInt32 { Width: 1, Height: 1 })?;
-        let dxgi_device =
-            api_call!(device.cast::<IDXGIDevice>())?;
+    pub fn new(device: &ID3D11Device, capture_item: &GraphicsCaptureItem) -> anyhow::Result<Self> {
         let winrt_device =
-            api_call!(unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) })?;
-        let winrt_device =
-            api_call!(winrt_device.cast::<IDirect3DDevice>())?;
+            Self::create_winrt_device_from_d3d11_device(device)
+                .context("failed to create WinRT device from D3D11 device")?;
+
+        let frame_pool_size = SizeInt32 { Width: 1, Height: 1 };
         let frame_pool = api_call! {
             Direct3D11CaptureFramePool::CreateFreeThreaded(
                 &winrt_device,
                 DirectXPixelFormat::B8G8R8A8UIntNormalized,
                 2,
-                SizeInt32 { Width: 1, Height: 1 })
+                frame_pool_size)
         }?;
-        let session =
-            api_call!(frame_pool.CreateCaptureSession(capture_item))?;
+
+        let session = api_call!(frame_pool.CreateCaptureSession(capture_item))?;
+        api_call!(session.SetIsCursorCaptureEnabled(false))?;
         api_call!(session.StartCapture())?;
 
         Ok(Self {
-            device: device.clone(),
-            device_context: device_context.clone(),
-            frame_texture,
+            d3d11_device: device.clone(),
             winrt_device,
             frame_pool,
-            frame_pool_size: SizeInt32 { Width: 1, Height: 1 },
-            _session: session,
+            frame_pool_size,
+            session,
         })
     }
 
-    pub fn capture_window(
-        device: &ID3D11Device,
-        device_context: &ID3D11DeviceContext,
-        hwnd: HWND)
-        -> anyhow::Result<Self> {
+    pub fn from_window(device: &ID3D11Device, window_handle: HWND) -> anyhow::Result<Self> {
         let capture_item =
-            api_call!(GraphicsCaptureItem::TryCreateFromWindowId(WindowId { Value: hwnd.0 as _ }))?;
-        Self::new(device, device_context, &capture_item)
+            api_call!(GraphicsCaptureItem::TryCreateFromWindowId(WindowId {
+                Value: window_handle.0 as _,
+            }))?;
+        Self::new(device, &capture_item)
     }
 
-    pub const fn frame_buffer(&self) -> &ID3D11Texture2D {
-        &self.frame_texture
-    }
-
-    pub const fn frame_buffer_size(&self) -> Size2D<u32> {
-        Size2D::new(
-            self.frame_pool_size.Width as _,
-            self.frame_pool_size.Height as _)
-    }
-
-    pub fn update(&mut self) {
-        if let Err(err) = self.update_internal() {
-            log::error!("{} failed: {err:?}", pretty_name::of_method!(Self::update));
-        }
-    }
-
-    fn update_internal(&mut self) -> anyhow::Result<()> {
+    pub fn get_next_frame(&mut self)
+        -> anyhow::Result<Option<(ID3D11Texture2D, Size2D<u32>)>> {
         let mut last_frame = None;
         while let Ok(frame) = self.frame_pool.TryGetNextFrame() {
             last_frame = Some(frame);
         }
 
         let Some(frame) = last_frame else {
-            return Ok(());
+            return Ok(None);
         };
 
-        let new_size = frame.ContentSize()?;
-        if new_size != self.frame_pool_size {
-            self.frame_pool_size = new_size;
+        let frame_size = frame.ContentSize()?;
+
+        if frame_size != self.frame_pool_size {
+            self.frame_pool_size = frame_size;
             self.frame_pool.Recreate(
                 &self.winrt_device,
                 DirectXPixelFormat::B8G8R8A8UIntNormalized,
                 2,
-                new_size)?;
-            self.frame_texture =
-                Self::create_texture(
-                    &self.device,
-                    DXGI_FORMAT_B8G8R8A8_UNORM,
-                    new_size)?;
+                frame_size)?;
             log::info!(
-                "{} resized to {}x{}",
-                pretty_name::of_field!(Self::frame_texture),
-                new_size.Width,
-                new_size.Height);
-            return Ok(());
+                "capturing frame pool resized to {}x{}",
+                frame_size.Width,
+                frame_size.Height);
+
+            // Skip this frame since we just resized.
+            return Ok(None);
         }
 
-        let frame_texture = unsafe {
+        #[expect(clippy::multiple_unsafe_ops_per_block)]
+        let frame = unsafe {
             frame
                 .pipe(|frame| api_call!(frame.Surface()))?
                 .pipe(|frame| api_call!(frame.cast::<IDirect3DDxgiInterfaceAccess>()))?
                 .pipe(|frame| api_call!(frame.GetInterface::<ID3D11Texture2D>()))?
         };
 
-        unsafe {
-            self.device_context
-                .CopyResource(&self.frame_texture, &frame_texture);
-        }
+        let frame_size =
+            Size2D::new(
+                frame_size.Width as u32,
+                frame_size.Height as u32);
 
-        Ok(())
+        Ok(Some((frame, frame_size)))
+    }
+
+    fn create_winrt_device_from_d3d11_device(device: &ID3D11Device)
+        -> anyhow::Result<IDirect3DDevice> {
+        Ok(device
+            .pipe(|device| api_call!(device.cast::<IDXGIDevice>()))?
+            .pipe(|device| api_call!(unsafe { CreateDirect3D11DeviceFromDXGIDevice(&device) }))?
+            .pipe(|device| api_call!(device.cast::<IDirect3DDevice>()))?)
     }
 
     fn create_texture(device: &ID3D11Device, format: DXGI_FORMAT, size: SizeInt32)
-                      -> anyhow::Result<ID3D11Texture2D> {
+        -> anyhow::Result<ID3D11Texture2D> {
         let desc = D3D11_TEXTURE2D_DESC {
             Width: size.Width as _,
             Height: size.Height as _,
@@ -154,14 +130,13 @@ impl CaptureSession {
             MiscFlags: 0,
         };
 
-        let mut texture = None;
-        api_call!(unsafe {
-            device.CreateTexture2D(
-                &raw const desc,
-                None,
-                Some(&raw mut texture))
-        })?;
-
-        Ok(texture.expect("unexpected null pointer"))
+        Ok({
+            out_var_or_err(|out| api_call!(unsafe {
+                device.CreateTexture2D(
+                    &raw const desc,
+                    None,
+                    Some(out))
+            }))?.expect("unexpected null pointer")
+        })
     }
 }

@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies.nkcore]
-git = "ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git"
+git = "git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git"
 branch = "main"
 
  [dependencies.ngd3dcompile]
- git = "ssh://nekomaru@nekomaru-ubuntu/home/nekomaru/git/Nekomaru-Graphics-2025.git"
+ git = "git://nekomaru-ubuntu/Nekomaru-Graphics-2025.git"
  branch = "main"
  package = "ngd3dcompile_macro"
 
@@ -23,8 +23,6 @@ pretty-name = "0.4.5"
 pretty_env_logger = "0.5.0"
 serde_json = "1"   # JSON serialization for protocol responses
 widestring = "1.2.1"
-
-# ffmpeg-next = { version = "8.0.0", features = ["static"] }
 
 # egui = "0.33.2"
 # egui-winit = "0.33.2"

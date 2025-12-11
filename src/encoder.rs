@@ -186,7 +186,7 @@ impl H264Encoder {
         ] {
             match api_call!(unsafe { codec_api.SetValue(api, &value) }) {
                 Ok(_) => log::info!("  {} set successfully", name),
-                Err(e) => log::warn!("  Failed to set {}: {:?} (encoder may not support this setting)", name, e),
+                Err(e) => log::warn!("  Failed to set {} (encoder may not support this setting): {:?}", name, e),
             }
         }
 
@@ -202,20 +202,6 @@ impl H264Encoder {
                 MFT_MESSAGE_NOTIFY_START_OF_STREAM,
                 0)
         })?;
-
-        // Query output stream info to check if we need to allocate samples
-        let output_stream_info = api_call!(unsafe {
-            mf_transform.GetOutputStreamInfo(0)
-        })?;
-
-        log::info!("Output stream info:");
-        log::info!("  cbSize: {}", output_stream_info.cbSize);
-        log::info!("  cbAlignment: {}", output_stream_info.cbAlignment);
-        log::info!("  dwFlags: 0x{:08X}", output_stream_info.dwFlags);
-        log::info!("  MFT_OUTPUT_STREAM_PROVIDES_SAMPLES: {}",
-            (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0);
-        log::info!("  MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES: {}",
-            (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0 as u32) != 0);
 
         log::info!("H.264 encoder ready");
 

@@ -70,7 +70,7 @@ pub fn create_device() -> anyhow::Result<(IDXGIFactory6, ID3D11Device, ID3D11Dev
     Ok((dxgi_factory, device, device_context))
 }
 
-pub fn create_texture(
+pub fn create_texture_2d(
     device: &ID3D11Device,
     size: Size2D<u32>,
     format: DXGI_FORMAT,
@@ -99,6 +99,30 @@ pub fn create_texture(
             None,
             Some(out))
     }))?.ok_or_else(|| anyhow::anyhow!("failed to create texture"))
+}
+
+pub fn create_srv_for_texture_2d(device: &ID3D11Device, texture: &ID3D11Texture2D)
+    -> anyhow::Result<ID3D11ShaderResourceView> {
+    Ok({
+        out_var_or_err(|out| api_call!(unsafe {
+            device.CreateShaderResourceView(
+                texture,
+                None,
+                Some(out))
+        }))?.expect("unexpected null pointer")
+    })
+}
+
+pub fn create_rtv_for_texture_2d(device: &ID3D11Device, texture: &ID3D11Texture2D)
+    -> anyhow::Result<ID3D11RenderTargetView> {
+    Ok({
+        out_var_or_err(|out| api_call!(unsafe {
+            device.CreateRenderTargetView(
+                texture,
+                None,
+                Some(out))
+        }))?.expect("unexpected null pointer")
+    })
 }
 
 #[expect(

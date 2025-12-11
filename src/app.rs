@@ -1,6 +1,9 @@
 mod helper;
 use helper::AppWrapper;
 
+mod capture_selector;
+use capture_selector::LiveCaptureWindowSelector;
+
 use crate::capture::CaptureSession;
 use crate::converter::NV12Converter;
 use crate::encoder::H264Encoder;
@@ -22,14 +25,15 @@ use wry::WebViewBuilder;
 use winit::{
     dpi::PhysicalSize,
     event::WindowEvent,
-    event_loop::EventLoop,
     event_loop::ActiveEventLoop,
+    event_loop::EventLoop,
     window::Window,
-    window::WindowId,
     window::WindowButtons,
+    window::WindowId,
 };
 
 use windows::core::*;
+use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::System::Com::*;
@@ -53,7 +57,9 @@ struct LiveApp {
     resampler: Resampler,
 
     // LiveUI main capture session and staging textures
-    main_capture: CaptureSession,
+    main_capture_selector: LiveCaptureWindowSelector,
+    main_capture_hwnd: HWND,
+    main_capture: Option<CaptureSession>,
     main_capture_staging_bgra8: ID3D11Texture2D,
     main_capture_staging_bgra8_rtv: ID3D11RenderTargetView,
 
@@ -93,21 +99,8 @@ impl LiveApp {
             NV12Converter::new(&device, &device_context)
                 .context("failed to create bgra-to-nv12 converter")?;
 
-        let main_capture_target = {
-            use windows::Win32::UI::WindowsAndMessaging::FindWindowA;
-            api_call!(unsafe {
-                FindWindowA(
-                    PCSTR::default(),
-                    PCSTR(c"Nekomaru LiveUI v1".as_ptr().cast()))
-            })?
-        };
-
-        let main_capture =
-            CaptureSession::capture_window(&device, &device_context, main_capture_target)
-                .context("failed to start main capture session")?;
-
         let main_capture_staging_bgra8 =
-            helper::create_texture(
+            helper::create_texture_2d(
                 &device,
                 Self::STREAM_FRAME_SIZE,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -118,16 +111,11 @@ impl LiveApp {
                 .context("failed to create staging texture")?;
 
         let main_capture_staging_bgra8_rtv =
-            out_var_or_err(|out| api_call!(unsafe {
-                device.CreateRenderTargetView(
-                    &main_capture_staging_bgra8,
-                    None,
-                    Some(out))
-            }))?
+            helper::create_rtv_for_texture_2d(&device, &main_capture_staging_bgra8)
                 .context("failed to create staging texture rtv")?;
 
         let main_capture_staging_nv12 =
-            helper::create_texture(
+            helper::create_texture_2d(
                 &device,
                 Self::STREAM_FRAME_SIZE,
                 DXGI_FORMAT_NV12,
@@ -156,7 +144,7 @@ impl LiveApp {
                 .with_headers(main_webview_header_map)
                 .with_custom_protocol("stream".to_owned(), move |_, request| {
                     handle_stream_request(&stream_manager_for_protocol, request)
-                        .inspect_err(|err| log::error!("{:?}", err))
+                        .inspect_err(|err| log::error!("{err:?}"))
                         .unwrap_or_default()
                 })
                 .build(&main_window)
@@ -217,7 +205,9 @@ impl LiveApp {
             device,
             device_context,
             resampler,
-            main_capture,
+            main_capture_selector: default(),
+            main_capture_hwnd: default(),
+            main_capture: None,
             main_capture_staging_bgra8,
             main_capture_staging_bgra8_rtv,
             stream_manager,
@@ -228,51 +218,81 @@ impl LiveApp {
         if window_id == self.main_window.id() {
             match event {
                 WindowEvent::RedrawRequested => {
-                    // Update capture and resample to staging texture ("restock the shelf")
-                    self.main_capture.update();
-
-                    let source_texture =
-                        self.main_capture.frame_buffer();
-
-                    let viewport = D3D11_VIEWPORT {
-                        TopLeftX: 0.0,
-                        TopLeftY: 0.0,
-                        Width: Self::STREAM_FRAME_SIZE.width as f32,
-                        Height: Self::STREAM_FRAME_SIZE.height as f32,
-                        MinDepth: 0.0,
-                        MaxDepth: 1.0,
-                    };
-                    unsafe {
-                        self.device_context
-                            .RSSetViewports(Some(&[viewport]));
+                    if self.main_capture_selector.update(&mut self.main_capture_hwnd) {
+                        // Note that we only try to start capture once per foreground window change.
+                        // If the first attempt fails, subsequent attempts will also fail for the
+                        // same window.
+                        self.main_capture =
+                            CaptureSession::from_window(&self.device, self.main_capture_hwnd)
+                                .inspect_err(|err| log::error!("failed to start capture: {err}"))
+                                .ok();
                     }
 
-                    let source_view =
-                        out_var_or_err(|out| api_call!(unsafe {
-                            self.device.CreateShaderResourceView(
-                                source_texture,
-                                None,
-                                Some(out))
-                        }))
-                            .expect("failed to create shader view")
-                            .expect("failed to create shader view");
-                    self.resampler.resample(
-                        &self.device_context,
-                        &source_view,
-                        &self.main_capture_staging_bgra8_rtv);
-
-                    // CRITICAL: Flush and wait for GPU to complete resampling
-                    // Flush() submits commands, sleep gives GPU time to execute them
-                    unsafe { self.device_context.Flush(); }
-                    thread::sleep(std::time::Duration::from_millis(5));
-
-                    // Request next frame immediately to keep "shelf" continuously updated
-                    // This creates a continuous loop: RedrawRequested → update → request_redraw → RedrawRequested...
-                    self.main_window.request_redraw();
-                }
-                WindowEvent::CloseRequested => {},
+                    self.resample_captured_frame()
+                        .inspect_err(|err| log::error!("failed to resample captured frame: {err}"))
+                        .ok();
+                },
                 _ => {},
             }
+        }
+    }
+
+    fn resample_captured_frame(&mut self) -> anyhow::Result<()> {
+        // Ensure continuous WindowEvent::RedrawRequested events.
+        defer(|| self.main_window.request_redraw());
+
+        let Some(capture_session) = &mut self.main_capture else {
+            // No capture session running, skip the resampling.
+            return Ok(());
+        };
+
+        let capture_result =
+            capture_session
+                .get_next_frame()
+                .context("failed to get next frame from capture session")?;
+        let Some((source_texture, source_size)) = capture_result else {
+            // No new frame arrived, but it's ok. Just skip the resampling.
+            return Ok(());
+        };
+
+        let target_size = Self::STREAM_FRAME_SIZE;
+        let viewport =
+            Self::calculate_resample_viewport(source_size, target_size);
+        unsafe {
+            self.device_context
+                .RSSetViewports(Some(&[viewport]));
+        }
+
+        let source_view =
+            helper::create_srv_for_texture_2d(&self.device, &source_texture)
+                .context("failed to create rtv for source texture")?;
+        self.resampler.resample(
+            &self.device_context,
+            &source_view,
+            &self.main_capture_staging_bgra8_rtv);
+
+        Ok(())
+    }
+
+    fn calculate_resample_viewport(
+        source_size: Size2D<u32>,
+        target_size: Size2D<u32>) -> D3D11_VIEWPORT {
+        let scale =
+            f32::min(
+                target_size.width as f32 / source_size.width as f32,
+                target_size.height as f32 / source_size.height as f32);
+        let source_size_scaled =
+            (source_size.to_f32() * scale).floor().to_u32();
+        let target_offset =
+            (target_size - source_size_scaled).to_vector() / 2;
+
+        D3D11_VIEWPORT {
+            TopLeftX: target_offset.x as _,
+            TopLeftY: target_offset.y as _,
+            Width: source_size_scaled.width as _,
+            Height: source_size_scaled.height as _,
+            MinDepth: 0.0,
+            MaxDepth: 1.0,
         }
     }
 }
