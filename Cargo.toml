@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies.nkcore]
 git = "git://nekomaru-ubuntu/Nekomaru-Rust.git"
-rev = "843c31c1"
+rev = "7e5d8946"
 features = ["debug"]
 
 [dependencies.ngd3dcompile]
@@ -15,7 +15,7 @@ package = "ngd3dcompile_macro"
 
 [dependencies.winrt-capture]
 git = "git://nekomaru-ubuntu/Nekomaru-Rust.git"
-rev = "843c31c1"
+rev = "7e5d8946"
 
 [dependencies]
 # bytemuck = { version = "1.24.0", features = ["derive", "const_zeroed"] }

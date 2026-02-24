@@ -114,7 +114,9 @@ impl LiveApp {
                 .context("failed to create staging texture")?;
 
         let main_capture_staging_bgra8_rtv =
-            helper::create_rtv_for_texture_2d(&device, &main_capture_staging_bgra8)
+            helper::create_rtv_for_texture_2d(
+                &device,
+                &main_capture_staging_bgra8)
                 .context("failed to create staging texture rtv")?;
 
         unsafe {
@@ -226,14 +228,12 @@ impl LiveApp {
             capture_session
                 .get_next_frame(&self.device_context)
                 .context("failed to get next frame from capture session")?;
-        let Some(source_texture) = capture_result else {
+        let Some(capture_frame) = capture_result else {
             // No new frame arrived, but it's ok. Just skip the resampling.
             return Ok(());
         };
 
-        let mut source_desc = D3D11_TEXTURE2D_DESC::default();
-        unsafe { source_texture.GetDesc(&raw mut source_desc); };
-        let source_size = Size2D::new(source_desc.Width, source_desc.Height);
+        let source_size = capture_frame.size;
 
         unsafe {
             self.device_context
@@ -249,7 +249,7 @@ impl LiveApp {
         }
 
         let source_view =
-            helper::create_srv_for_texture_2d(&self.device, &source_texture)
+            helper::create_srv_for_texture_2d(&self.device, &capture_frame.raw_texture)
                 .context("failed to create rtv for source texture")?;
         self.resampler.resample(
             &self.device_context,

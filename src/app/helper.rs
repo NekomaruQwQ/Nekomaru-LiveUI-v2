@@ -129,6 +129,28 @@ pub fn create_rtv_for_texture_2d(device: &ID3D11Device, texture: &ID3D11Texture2
     })
 }
 
+pub fn create_rtv_for_texture_2d_with_format(
+    device: &ID3D11Device,
+    texture: &ID3D11Texture2D,
+    format: DXGI_FORMAT)
+    -> anyhow::Result<ID3D11RenderTargetView> {
+    let desc = D3D11_RENDER_TARGET_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D11_RENDER_TARGET_VIEW_DESC_0 {
+            Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 },
+        },
+    };
+    Ok({
+        out_var_or_err(|out| api_call!(unsafe {
+            device.CreateRenderTargetView(
+                texture,
+                Some(&raw const desc),
+                Some(out))
+        }))?.expect("unexpected null pointer")
+    })
+}
+
 #[expect(dead_code, reason = "may be useful in the future")]
 #[expect(
     clippy::panic_in_result_fn,
