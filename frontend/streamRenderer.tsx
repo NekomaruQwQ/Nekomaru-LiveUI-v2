@@ -66,6 +66,8 @@ export function StreamRenderer() {
     );
 }
 
+let lastFrameTime = 0;
+
 /**
  * Render a decoded video frame to canvas
  */
@@ -92,6 +94,15 @@ function renderFrame(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, f
     if (DEBUG.debugStreamRenderer) {
         console.log('StreamRenderer: Frame closed (GPU memory released)');
     }
+
+    const now = performance.now();
+    if (lastFrameTime > 0) {
+        const delta = now - lastFrameTime;
+        if (DEBUG.debugStreamRenderer) {
+            console.log('StreamRenderer: Frame interval: %d ms', delta);
+        }
+    }
+    lastFrameTime = now;
 }
 
 /**
@@ -125,43 +136,16 @@ async function startStreamLoop(decoder: H264Decoder) {
 
             consecutiveErrors = 0;
 
-            // Parse headers
-            const sequence = parseInt(response.headers.get('X-Sequence') || '0');
-            const timestamp = parseInt(response.headers.get('X-Timestamp') || '0');
-            const isKeyframe = response.headers.get('X-Keyframe') === 'true';
-
-            if (DEBUG.debugStreamRenderer) {
-                console.log(
-                    'StreamLoop: Received frame - sequence: %d, timestamp: %d μs, keyframe: %s',
-                    sequence,
-                    timestamp,
-                    isKeyframe);
+            const data = await response.json();
+            for (const frameInfo of data.frames) {
+                const sequence = frameInfo.sequence;
+                lastSequence = Math.max(lastSequence, sequence);
+                const frameDat = Uint8Array.fromBase64(frameInfo.data);
+                const frame = parseStreamFrame(frameDat);
+                decoder.decodeFrame(frame);
+                frameCount++;
             }
-
-            lastSequence = sequence;
-
-            // Parse binary frame data
-            const arrayBuffer = await response.arrayBuffer();
-            if (DEBUG.debugStreamRenderer) {
-                console.log(
-                    'StreamLoop: Frame data size: %d bytes',
-                    arrayBuffer.byteLength);
-            }
-
-            const frameData = parseStreamFrame(new Uint8Array(arrayBuffer));
-            if (DEBUG.debugStreamRenderer) {
-                console.log(
-                    'StreamLoop: Parsed frame data - %d NAL units',
-                    frameData.nalUnits.length);
-            }
-
-            // Decode frame
-            await decoder.decodeFrame(frameData);
-
-            frameCount++;
-            if (DEBUG.debugStreamRenderer && frameCount % 60 === 0) {
-                console.log('StreamLoop: Decoded %d frames total', frameCount);
-            }
+            await sleep(16);
 
         } catch (e) {
             console.error('StreamLoop: Stream error:', e);

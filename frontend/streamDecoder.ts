@@ -105,9 +105,10 @@ export class H264Decoder {
     /**
      * Decode a frame
      */
-    async decodeFrame(frameData: StreamFrameData) {
+    decodeFrame(frameData: StreamFrameData) {
         if (!this.decoder || !this.isConfigured) {
-            throw new Error('Decoder not initialized');
+            console.error('Decoder not initialized');
+            return;
         }
 
         if (DEBUG.debugStreamDecoder) {
@@ -179,7 +180,8 @@ export class H264Decoder {
     private handleFrame(frame: VideoFrame) {
         if (DEBUG.debugStreamDecoder) {
             console.log(
-                'H264Decoder: Frame decoded! %dx%d, timestamp: %d μs',
+                'H264Decoder: Frame decoded! %s %dx%d, timestamp: %d μs',
+                frame.format,
                 frame.displayWidth,
                 frame.displayHeight,
                 frame.timestamp);

@@ -1,4 +1,5 @@
 mod helper;
+use base64::Engine;
 use helper::AppWrapper;
 
 mod capture_selector;
@@ -399,23 +400,30 @@ fn handle_stream_request(
             let after_seq = parse_query_param(query, "after").unwrap_or(0);
 
             // Wait for next frame (timeout = 5s)
-            let frame = manager.wait_for_frame(after_seq, Duration::from_millis(5000))
-                .ok_or("timeout waiting for frame")?;
+            let frames = manager.get_frames(after_seq);
 
-            // Serialize frame as binary
-            let mut buffer = Vec::new();
-            serialize_stream_frame(&frame, &mut buffer)?;
+            use serde_json::*;
+            let base64 = base64::engine::general_purpose::STANDARD;
+            let response = json!({
+                "frames": frames.iter().map(|frame| {
+                    // Serialize frame as binary
+                    let mut buffer = Vec::new();
+                    let _ = serialize_stream_frame(&frame, &mut buffer);
+                    json!({
+                        "sequence": frame.sequence,
+                        "timestamp": frame.timestamp_us,
+                        "is_keyframe": frame.is_keyframe,
+                        "data": base64.encode(&buffer)
+                    })
+                }).collect::<Vec<_>>()
+            });
 
-            log::debug!("serving frame seq={}, keyframe={}", frame.sequence, frame.is_keyframe);
 
             Response::builder()
-                .header("Content-Type", "application/octet-stream")
-                .header("X-Sequence", frame.sequence.to_string())
-                .header("X-Timestamp", frame.timestamp_us.to_string())
-                .header("X-Keyframe", frame.is_keyframe.to_string())
+                .header("Content-Type", "application/json")
                 .header("Access-Control-Allow-Origin", "*")
                 .header("Access-Control-Expose-Headers", "X-Sequence,X-Timestamp,X-Keyframe")
-                .body(Cow::Owned(buffer))
+                .body(Cow::Owned(response.to_string().into_bytes()))
                 .map_err(Into::into)
         }
 

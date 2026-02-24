@@ -148,38 +148,34 @@ impl StreamManager {
     /// # Single-Client Design
     /// This implementation assumes a single client. Old frames and non-keyframes (when required)
     /// are discarded rather than preserved.
-    pub fn wait_for_frame(&self, after_sequence: u64, timeout: Duration) -> Option<StreamFrame> {
-        let start = Instant::now();
-        // First frame must be a keyframe for H.264 decoder initialization
-        let require_keyframe = after_sequence == 0;
+    pub fn get_frames(&self, after_sequence: u64) -> Vec<StreamFrame> {
+        let mut frames = Vec::new();
 
-        loop {
-            // Drain old/invalid frames until we find a valid one
-            while let Some(frame) = self.frame_queue.pop() {
-                let is_valid = frame.sequence > after_sequence
-                    && (!require_keyframe || frame.is_keyframe);
-
-                if is_valid {
-                    // Found a valid frame
-                    log::debug!(
-                        "Returning frame seq={}, keyframe={}, after_seq={}",
-                        frame.sequence, frame.is_keyframe, after_sequence);
-                    return Some(frame);
-                }
-                // Single-client: discard old/invalid frames (no other client needs them)
+        // Drain old/invalid frames until we find a valid one
+        while let Some(frame) = self.frame_queue.pop() {
+            if frame.sequence <= after_sequence {
+                // Old frame, discard
                 log::trace!(
-                    "Discarding frame seq={}, keyframe={} (after_seq={}, require_keyframe={})",
-                    frame.sequence, frame.is_keyframe, after_sequence, require_keyframe);
+                    "Discarding old frame seq={}, keyframe={} (after_seq={})",
+                    frame.sequence, frame.is_keyframe, after_sequence);
+                continue;
             }
 
-            // Queue empty, check timeout
-            if start.elapsed() > timeout {
-                return None;
+            if after_sequence == 0 && !frame.is_keyframe {
+                // First frame must be a keyframe, discard non-keyframe
+                log::trace!(
+                    "Discarding non-keyframe seq={} (after_seq=0, require_keyframe=true)",
+                    frame.sequence);
+                continue;
             }
 
-            // Sleep briefly before retry
-            std::thread::sleep(Duration::from_millis(10));
+            log::debug!(
+                "Returning frame seq={}, keyframe={}, after_seq={}",
+                frame.sequence, frame.is_keyframe, after_sequence);
+            frames.push(frame);
         }
+
+        frames
     }
 
     /// Get cached codec parameters (SPS/PPS).
