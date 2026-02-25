@@ -202,6 +202,12 @@ impl LiveApp {
                             CaptureSession::from_hwnd(&self.device, self.main_capture_hwnd)
                                 .inspect_err(|err| log::error!("failed to start capture: {err}"))
                                 .ok();
+                        unsafe {
+                            self.device_context
+                                .ClearRenderTargetView(
+                                    &self.main_capture_staging_bgra8_rtv,
+                                    &[0.16, 0.16, 0.16, 1.0]);
+                        }
                     }
 
                     // It's safe to ignore resampling errors here, as they do not affect
@@ -235,13 +241,6 @@ impl LiveApp {
         };
 
         let source_size = capture_frame.size;
-
-        unsafe {
-            self.device_context
-                .ClearRenderTargetView(
-                    &self.main_capture_staging_bgra8_rtv,
-                    &[0.16, 0.16, 0.16, 1.0]);
-        }
 
         let viewport =
             Self::calculate_resample_viewport(source_size, STREAM_FRAME_SIZE);
