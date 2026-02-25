@@ -2,7 +2,7 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | End-to-End Testing Next
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | End-to-End Testing Next
 **Last Updated**: 2026-02-25
 **Hardware**: RTX 5090 | Windows 11
 
@@ -86,6 +86,7 @@ The project is split into three independently running components. The hard work 
 │                                                                  │
 │  HTTP API                                                        │
 │    - /streams             → list / create / delete captures      │
+│    - /streams/auto        → start / stop / status auto-selector  │
 │    - /streams/:id/init    → codec params (SPS, PPS, resolution)  │
 │    - /streams/:id/frames  → encoded frames (polling)             │
 │                                                                  │
@@ -106,7 +107,8 @@ The project is split into three independently running components. The hard work 
 │    - Typed API client via Hono RPC (hc)                          │
 │    - H264Decoder (avcC descriptor, Annex B → AVCC conversion)    │
 │    - StreamRenderer (Canvas rendering, ~60fps polling)           │
-│    - Stream management UI (window picker, create/stop captures)  │
+│    - Auto-select mode by default (polls selector status)         │
+│    - Manual fallback: window picker, create/stop captures        │
 │    - Multiple viewers can connect to the same stream             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -189,6 +191,12 @@ live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200
 # Capture the primary monitor's active window
 live-capture.exe --width 1920 --height 1200
 
+# List capturable windows as JSON
+live-capture.exe --enumerate-windows
+
+# Get the current foreground window as JSON (used by auto-selector)
+live-capture.exe --foreground-window
+
 # Dump to file for debugging
 live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200 > capture_dump.bin
 ```
@@ -251,6 +259,18 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 
 **`GET /streams/windows`** — List capturable windows (one-shot spawn of `live-capture.exe --enumerate-windows`).
 
+### Auto Window Selector
+
+**`GET /streams/auto`** — Get auto-selector status.
+
+```json
+{ "active": true, "currentStreamId": "abc123", "currentHwnd": "0x1A2B3C" }
+```
+
+**`POST /streams/auto`** — Start the auto-selector (idempotent). Polls the foreground window every 2 seconds and automatically switches captures when the foreground matches the include list.
+
+**`DELETE /streams/auto`** — Stop the auto-selector and destroy its managed stream.
+
 ---
 
 ## Implementation Status
@@ -260,7 +280,7 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
 | **IPC Protocol (lib)** | `service/capture/src/lib.rs` | Done | Wire protocol types (`NALUnit`, `CodecParams`, `FrameMessage`) + serialization/deserialization via `impl Write`/`impl Read`. Round-trip tested. |
-| **CLI + Orchestration** | `service/capture/src/main.rs` | Done | `--hwnd`, `--width`, `--height` CLI. Bakery model: capture thread + encoding thread → binary stdout. |
+| **CLI + Orchestration** | `service/capture/src/main.rs` | Done | `--hwnd`, `--width`, `--height` CLI. `--enumerate-windows` and `--foreground-window` one-shot modes. Bakery model: capture thread + encoding thread → binary stdout. |
 | **D3D11 Helpers** | `service/capture/src/d3d11.rs` | Done | Device creation, texture/view factories (subset of monolith `app/helper.rs`) |
 | **Format Converter** | `service/capture/src/converter.rs` | Done | GPU-accelerated BGRA→NV12 via `ID3D11VideoProcessor`. Resolution now parameterized. |
 | **H.264 Encoder** | `service/capture/src/encoder.rs` | Done | Async MFT with low-latency settings, NAL parsing. Callbacks passed to `run()` (monomorphized, no `Box<dyn>`). |
@@ -268,6 +288,7 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | **Debug Logging** | `service/capture/src/encoder/debug.rs` | Done | Prints supported media types |
 | **Resampler** | `service/capture/src/resample.rs` | Done | Scales captured frames with viewport set |
 | **Capture** | `service/capture/src/capture.rs` | Done | Windows Graphics Capture wrapper + viewport calculation |
+| **Window Enumeration** | `crates/enumerate-windows/src/lib.rs` | Done | `enumerate_windows()` lists capturable windows. `get_foreground_window()` returns current foreground window info. |
 
 ### Completed (Frontend Decoder)
 
@@ -287,11 +308,12 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
 | **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/streams` → API, everything else → Vite. SIGINT/SIGTERM cleanup. |
-| **Stream API** | `server/api.ts` | Done | Hono routes: `GET/POST/DELETE /streams`, `GET /streams/:id/init`, `GET /streams/:id/frames?after=N`, `GET /streams/windows`. Zod validation on POST. |
+| **Stream API** | `server/api.ts` | Done | Hono routes: `GET/POST/DELETE /streams`, `GET/POST/DELETE /streams/auto`, `GET /streams/:id/init`, `GET /streams/:id/frames?after=N`, `GET /streams/windows`. Zod validation on POST. |
 | **Process Manager** | `server/process.ts` | Done | Spawns `live-capture.exe` via `Bun.spawn`. Wires stdout → ProtocolParser → StreamBuffer. Tracks lifecycle (starting → running → stopped). stderr forwarded with `[capture:id]` prefix. |
 | **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
 | **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. |
 | **Constants** | `server/common.ts` | Done | Port (`LIVE_PORT` env or 3000), exe path, buffer capacity. |
+| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Include/exclude list matching. Auto-creates/destroys streams on window switch. |
 
 ### Completed (Frontend — React + Hono RPC)
 
@@ -300,7 +322,7 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | **API Client** | `frontend/src/api.ts` | Done | Typed Hono RPC client via `hc<ApiType>("/streams")`. Imports server route type for end-to-end type safety. `fetchInit()` retries on 503 with exponential backoff. |
 | **Decoder** | `frontend/src/streamDecoder.ts` | Done | Uses `fetchInit()` from API client (handles 503 retry). WebCodecs H264Decoder with avcC descriptor. |
 | **Renderer** | `frontend/src/streamRenderer.tsx` | Done | Polls `/streams/:id/frames` via typed Hono RPC client at ~60fps. Canvas rendering with GPU memory management. Styled with Tailwind. |
-| **App** | `frontend/src/app.tsx` | Done | Stream management UI. JetBrains Islands dark theme (Tailwind utility classes, no Emotion). Window picker, create/stop captures. |
+| **App** | `frontend/src/app.tsx` | Done | Stream management UI. JetBrains Islands dark theme (Tailwind utility classes, no Emotion). Auto-select mode by default (polls `/streams/auto`). Manual fallback: window picker, create/stop captures. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
 | **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc`, `root: "."`, `@` and `@shadcn` aliases. |
 
@@ -464,7 +486,8 @@ Nekomaru-LiveUI-v2/
 │   ├── api.ts                       # Hono routes for /streams/* (exports ApiType for frontend RPC)
 │   ├── process.ts                   # Spawn/manage live-capture.exe child processes
 │   ├── buffer.ts                    # Per-stream circular frame buffer + SPS/PPS cache
-│   └── protocol.ts                  # Incremental binary wire protocol parser
+│   ├── protocol.ts                  # Incremental binary wire protocol parser
+│   └── selector.ts                  # Auto window selector (polls foreground, switches captures)
 │
 └── frontend/                        # Frontend (React + Vite + Tailwind)
     ├── package.json
@@ -523,6 +546,9 @@ Nekomaru-LiveUI-v2/
 - [x] Decoder retries on 503 (stream starting up) with exponential backoff
 - [x] Migrated from Preact to React 19
 - [x] UI redesigned: JetBrains Islands dark theme, Emotion CSS replaced with Tailwind utilities, shadcn removed
+- [x] Auto window selector integrated (server-side `selector.ts`, one-shot `--foreground-window` CLI)
+- [x] Frontend starts in auto-select mode by default, polls `/streams/auto` for stream ID changes
+- [x] Manual fallback mode (window picker) available when auto-select is stopped
 - [ ] Frontend works in both webview and regular browser
 
 ### End-to-End (Pending)
@@ -534,6 +560,9 @@ Nekomaru-LiveUI-v2/
 - [ ] No frame drops under normal load
 - [ ] Handles long runs (10+ minutes) without memory leak
 - [ ] CPU usage reasonable (NVENC should be low CPU)
+- [ ] Auto-selector switches capture when foreground window changes
+- [ ] Auto-selector skips windows not in include list
+- [ ] Frontend tracks stream ID changes during auto-select switches
 
 ---
 
