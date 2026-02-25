@@ -2,8 +2,8 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX11 to WebView**
 
-**Status**: ✅ Encoding Pipeline Complete | ⏳ Streaming Protocol Pending
-**Last Updated**: 2025-12-11
+**Status**: ✅ Encoding Pipeline Complete | ✅ Streaming Protocol Complete | ✅ Frontend Decoder Complete
+**Last Updated**: 2026-02-24
 **Hardware**: RTX 5090 | Windows 11
 
 ---
@@ -36,10 +36,7 @@ cargo run
 - Encoding thread processes frames at 60fps
 - Console logs NAL units: `SPS(27B) + PPS(8B) + IDR(67KB)` then `P-frames(1.5-30KB)`
 - StreamManager buffers encoded frames (60 frame circular buffer)
-
-**What's NOT working yet:**
-- No video display in webview (custom protocol not wired up)
-- No frontend decoder (WebCodecs implementation pending)
+- Video displays in webview via WebCodecs decoder
 
 ---
 
@@ -101,18 +98,18 @@ We use a producer-consumer pattern where the UI thread continuously "restocks" a
 │  - Sequence numbering for long-polling                          │
 └────────────────────┬────────────────────────────────────────────┘
                      │
-                     ↓ (TODO)
+                     ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ CUSTOM PROTOCOL HANDLER (stream://)                             │
-│  - stream://init → JSON {sps, pps, width, height}               │
-│  - stream://stream?after=N → Binary frame data                  │
+│ HTTP PROTOCOL HANDLER (http://stream.localhost/)                │
+│  - /init → JSON {sps, pps, width, height}                       │
+│  - /stream?after=N → JSON {frames: [{sequence, data}, ...]}     │
 └────────────────────┬────────────────────────────────────────────┘
                      │
-                     ↓ (TODO)
+                     ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │ FRONTEND (WebCodecs + Canvas)                                   │
-│  - H.264 decoder (VideoDecoder API)                             │
-│  - Canvas rendering with frame.close()                          │
+│  - H264Decoder class (VideoDecoder API + avcC descriptor)       │
+│  - StreamRenderer component (Canvas rendering + frame.close())  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -138,14 +135,14 @@ We use a producer-consumer pattern where the UI thread continuously "restocks" a
 | **Integration** | `src/app.rs` | ✅ Done | Spawns encoding thread, wires callbacks |
 | **Resampler** | `src/resample.rs` | ✅ Done | Scales captured frames with viewport set |
 
-### ⏳ Pending (Streaming & Frontend)
+### ✅ Completed (Streaming & Frontend)
 
-| Component | File | Status | Next Action |
-|-----------|------|--------|-------------|
-| **Protocol Handler** | `src/app.rs` | ⏳ Commented out | Uncomment `handle_stream_request()`, wire to WebView |
-| **Frontend Decoder** | `frontend/decoder.ts` | ⏳ Not started | Implement `H264Decoder` with WebCodecs |
-| **Frontend Renderer** | `frontend/renderer.tsx` | ⏳ Not started | Implement `VideoRenderer` with Canvas |
-| **Integration** | `frontend/app.tsx` | ⏳ Partial | Replace empty Card with VideoRenderer |
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| **Protocol Handler** | `src/app.rs` | ✅ Done | HTTP via `http://stream.localhost/` (wry WebView2 pattern) |
+| **Frontend Decoder** | `frontend/streamDecoder.ts` | ✅ Done | H264Decoder with WebCodecs, avcC descriptor, Annex B → AVCC conversion |
+| **Frontend Renderer** | `frontend/streamRenderer.tsx` | ✅ Done | StreamRenderer with Canvas, ~60fps polling |
+| **Integration** | `frontend/app.tsx` | ✅ Done | StreamRenderer integrated in Card |
 
 ---
 
@@ -285,9 +282,43 @@ pub struct StreamFrame {
 - **Capacity**: 60 frames (~1 second buffer at 60fps)
 - **Overflow**: Drops oldest frame (live streaming behavior)
 - **SPS/PPS caching**: Extracts from IDR frames for new clients
-- **Long-polling**: `wait_for_frame(after_sequence, timeout)`
+- **Non-blocking**: `get_frames(after_sequence)` returns immediately; frontend polls at ~60fps
 
-### 4. Integration (`src/app.rs`)
+### 4. Protocol Handler (`src/app.rs`)
+
+**Endpoint**: `http://stream.localhost/` (wry WebView2 pattern)
+
+**`/init`** - Returns codec parameters for decoder initialization:
+```json
+{
+    "sps": "<base64>",
+    "pps": "<base64>",
+    "width": 1920,
+    "height": 1200
+}
+```
+
+**`/stream?after=N`** - Returns frames after sequence N:
+```json
+{
+    "frames": [
+        { "sequence": 123, "data": "<base64>" },
+        { "sequence": 124, "data": "<base64>" }
+    ]
+}
+```
+
+**Binary frame format** (inside base64 `data`):
+```
+[u64 LE: timestamp_us]
+[u32 LE: num_nal_units]
+For each NAL unit:
+    [u8: nal_type]
+    [u32 LE: data_length]
+    [data_length bytes: NAL data with Annex B start code]
+```
+
+### 5. Integration (`src/app.rs`)
 
 **UI Thread** (`on_window_event`):
 ```rust
@@ -470,132 +501,6 @@ Encoding Thread:
 
 ## Next Steps
 
-### Immediate (Streaming Protocol)
-
-**Goal**: Wire up `stream://` custom protocol handler
-
-**Tasks**:
-1. ⏳ Uncomment `handle_stream_request()` in `src/app.rs:249`
-2. ⏳ Add `stream_manager` reference to `LiveApp` struct (currently `_stream_manager`)
-3. ⏳ Wire up WebView custom protocol:
-   ```rust
-   let stream_manager_clone = Arc::clone(&stream_manager);
-   let main_webview = WebViewBuilder::new()
-       .with_url("http://localhost:9688/")
-       .with_custom_protocol("stream", move |request| {
-           handle_stream_request(&stream_manager_clone, request)
-       })
-       .build(&main_window)?;
-   ```
-4. ⏳ Test endpoints:
-   - `stream://init` → Should return JSON `{sps, pps, width, height}`
-   - `stream://stream?after=0` → Should return binary frame data
-
-**Test with curl** (once wired):
-```bash
-# Get codec params
-curl stream://init
-
-# Get first frame (won't work from curl, need browser)
-# (Custom protocols only work in webview context)
-```
-
----
-
-### Short-Term (Frontend Decoder)
-
-**Goal**: Implement WebCodecs H.264 decoder
-
-**File**: `frontend/decoder.ts`
-
-**Key Components**:
-```typescript
-export class H264Decoder {
-    private decoder: VideoDecoder;
-
-    async init() {
-        // Fetch SPS/PPS from stream://init
-        // Build avcC descriptor (ISO 14496-15)
-        // Configure VideoDecoder
-    }
-
-    async decodeFrame(frameData: StreamFrameData) {
-        // Parse binary frame format
-        // Create EncodedVideoChunk
-        // decoder.decode(chunk)
-    }
-}
-
-export function parseStreamFrame(buffer: Uint8Array): StreamFrameData {
-    // Parse binary format:
-    // [u64: timestamp] [u32: num_nals] [nal_type, length, data]...
-}
-
-function buildAvcCDescriptor(sps: Uint8Array, pps: Uint8Array): Uint8Array {
-    // ISO 14496-15 format for WebCodecs
-}
-```
-
-**Codec String**: `avc1.42001f` (Baseline profile, level 3.1)
-
----
-
-### Medium-Term (Frontend Renderer)
-
-**Goal**: Render decoded frames to Canvas
-
-**File**: `frontend/renderer.tsx`
-
-**Component**:
-```typescript
-export function VideoRenderer() {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const decoderRef = useRef<H264Decoder | null>(null);
-
-    useEffect(() => {
-        const decoder = new H264Decoder((frame: VideoFrame) => {
-            const canvas = canvasRef.current;
-            const ctx = canvas.getContext('2d');
-
-            // Resize canvas if needed
-            canvas.width = frame.displayWidth;
-            canvas.height = frame.displayHeight;
-
-            // Draw frame
-            ctx.drawImage(frame, 0, 0);
-
-            // CRITICAL: Release GPU memory
-            frame.close();
-        });
-
-        decoder.init().then(() => startStreamLoop(decoder));
-
-        return () => decoder.close();
-    }, []);
-
-    return <canvas ref={canvasRef} />;
-}
-
-async function startStreamLoop(decoder: H264Decoder) {
-    let lastSequence = 0;
-    while (true) {
-        const response = await fetch(`stream://stream?after=${lastSequence}`);
-        const frameData = parseStreamFrame(await response.arrayBuffer());
-        await decoder.decodeFrame(frameData);
-        lastSequence = parseInt(response.headers.get('X-Sequence'));
-    }
-}
-```
-
-**Integration** (`frontend/app.tsx`):
-```typescript
-<Card className={/* ... */}>
-    <VideoRenderer />  {/* Replace empty Card */}
-</Card>
-```
-
----
-
 ### Future Enhancements
 
 **Lower Priority**:
@@ -614,11 +519,11 @@ async function startStreamLoop(decoder: H264Decoder) {
 LiveUI/
 ├── Cargo.toml               # Dependencies: crossbeam, base64, serde_json, wry, windows
 ├── docs/
-│   └── README.md            # ← YOU ARE HERE
+│   └── readme.md            # ← YOU ARE HERE
 │
 ├── src/
 │   ├── main.rs              # Entry point, logger init
-│   ├── app.rs               # ✅ Main app, window events, encoding thread
+│   ├── app.rs               # ✅ Main app, window events, encoding thread, protocol handler
 │   ├── app/
 │   │   └── helper.rs        # ✅ Device creation, ApplicationHandler
 │   ├── capture.rs           # ✅ Windows Graphics Capture wrapper
@@ -628,12 +533,14 @@ LiveUI/
 │   │   ├── helper.rs        # ✅ Encoder enumeration, media type config
 │   │   └── debug.rs         # ✅ Media type logging utilities
 │   ├── resample.rs          # ✅ BGRA scaling shader (with viewport!)
-│   └── stream.rs            # ✅ StreamManager (lock-free queue)
+│   └── stream.rs            # ✅ StreamManager (lock-free queue, non-blocking)
 │
 └── frontend/
-    ├── app.tsx              # ⏳ Main React app (needs VideoRenderer)
-    ├── decoder.ts           # ⏳ TODO: H264Decoder, parseStreamFrame
-    └── renderer.tsx         # ⏳ TODO: VideoRenderer component
+    ├── index.tsx            # ✅ Entry point
+    ├── app.tsx              # ✅ Main Preact app with StreamRenderer
+    ├── streamDecoder.ts     # ✅ H264Decoder (WebCodecs + avcC), parseStreamFrame
+    ├── streamRenderer.tsx   # ✅ StreamRenderer (Canvas + polling loop)
+    └── debug.ts             # ✅ Debug flags
 ```
 
 **Note**: No `encoding_thread.rs` - logic is inlined in `app.rs::LiveApp::new()`
@@ -655,26 +562,23 @@ LiveUI/
 - [x] Viewport set before resample (no more 12-byte P-frames!) ✅
 - [x] GPU synchronization working (Flush + sleep) ✅
 
-### ⏳ Streaming Protocol (Pending)
+### ✅ Streaming Protocol (Complete)
 
-- [ ] `stream://init` returns valid JSON `{sps, pps, width, height}`
-- [ ] `stream://stream?after=N` returns binary frame data
-- [ ] Headers set correctly: `X-Sequence`, `X-Timestamp`, `X-Keyframe`
-- [ ] Long-polling timeout works (100ms)
-- [ ] Sequence numbers increment monotonically
-- [ ] Keyframe flag matches NAL unit type (IDR=true, NonIDR=false)
-- [ ] Base64 encoding of SPS/PPS works
-- [ ] Binary frame format parses correctly on frontend
+- [x] `/init` returns valid JSON `{sps, pps, width, height}`
+- [x] `/stream?after=N` returns JSON `{frames: [{sequence, data}, ...]}`
+- [x] Sequence numbers increment monotonically
+- [x] Keyframe flag matches NAL unit type (IDR=true, NonIDR=false)
+- [x] Base64 encoding of SPS/PPS and frame data works
+- [x] Binary frame format (inside base64 data) parses correctly on frontend
 
-### ⏳ Frontend Decoder (Pending)
+### ✅ Frontend Decoder (Complete)
 
-- [ ] WebCodecs `VideoDecoder` initializes with avcC descriptor
-- [ ] Codec string correct: `avc1.42001f` (Baseline level 3.1)
-- [ ] Decodes IDR frames successfully
-- [ ] Decodes P-frames successfully
-- [ ] No memory leaks (`frame.close()` called after render)
-- [ ] Browser DevTools shows no errors
-- [ ] Console logs frame timestamps and types
+- [x] WebCodecs `VideoDecoder` initializes with avcC descriptor
+- [x] Codec string dynamically built from SPS (profile/constraints/level)
+- [x] Annex B → AVCC conversion (strip start codes, add length prefixes)
+- [x] Decodes IDR frames successfully
+- [x] Decodes P-frames successfully
+- [x] No memory leaks (`frame.close()` called after render)
 
 ### ⏳ End-to-End (Pending)
 
@@ -723,7 +627,7 @@ crossbeam = "0.8"            # Lock-free ArrayQueue for StreamManager
 log = "0.4"
 pretty-name = "0.4"          # Method name formatting for errors
 pretty_env_logger = "0.5"
-serde_json = "1"             # JSON serialization for stream://init
+serde_json = "1"             # JSON serialization for /init and /stream endpoints
 widestring = "1.2"           # UTF-16 string handling for Windows APIs
 winit = { version = "0.30", features = ["rwh_06"] }
 wry = { version = "0.53", features = ["protocol"] }  # Custom protocol support

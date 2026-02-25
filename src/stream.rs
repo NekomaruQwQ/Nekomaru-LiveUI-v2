@@ -8,7 +8,7 @@ use nkcore::prelude::*;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Codec parameters (SPS/PPS) for H.264 stream
 #[derive(Debug, Clone)]
@@ -123,8 +123,9 @@ impl StreamManager {
 
         // If queue is full, drop oldest frame (live streaming behavior)
         if self.frame_queue.is_full() {
-            let _ = self.frame_queue.pop();
-            log::warn!("Stream queue full, dropping frame {}", sequence.saturating_sub(60));
+            if let Some(dropped) = self.frame_queue.pop() {
+                log::warn!("Stream queue full, dropping frame {}", dropped.sequence);
+            }
         }
 
         // Push new frame
@@ -135,19 +136,17 @@ impl StreamManager {
         Ok(())
     }
 
-    /// Get the next frame after the specified sequence number.
+    /// Get all available frames after the specified sequence number.
     ///
-    /// Blocks until a frame is available or timeout is reached.
-    /// Used by the protocol handler to implement long-polling.
+    /// Drains the queue and returns frames with sequence > `after_sequence`.
+    /// Returns immediately (non-blocking); the frontend polls at ~60fps.
     ///
     /// # Arguments
-    /// * `after_sequence` - Only return frames with sequence > this value
-    ///   - If `after_sequence == 0`, waits for the next keyframe (required for decoder initialization)
-    /// * `timeout` - Maximum time to wait for a frame
+    /// * `after_sequence` - Only return frames with sequence > this value.
+    ///   If 0, discards non-keyframes until a keyframe is found (decoder needs IDR to initialize).
     ///
     /// # Single-Client Design
-    /// This implementation assumes a single client. Old frames and non-keyframes (when required)
-    /// are discarded rather than preserved.
+    /// Assumes a single client. Old frames and non-keyframes (when starting) are discarded.
     pub fn get_frames(&self, after_sequence: u64) -> Vec<StreamFrame> {
         let mut frames = Vec::new();
 
