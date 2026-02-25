@@ -650,12 +650,8 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "enumerate-windows"
 version = "0.1.0"
-source = "git+git://nekomaru-ubuntu/Nekomaru-Rust.git?rev=44ac38e6#44ac38e6975a24452635692d8b67f187f3217cbb"
 dependencies = [
- "log",
- "pretty_env_logger",
  "serde",
- "serde_json",
  "windows 0.62.2",
 ]
 

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     ".",
     "app",
+    "crates/enumerate-windows",
     "service/capture",
 ]
 
@@ -24,8 +25,7 @@ git = "git://nekomaru-ubuntu/Nekomaru-Rust.git"
 rev = "44ac38e6"
 
 [workspace.dependencies.enumerate-windows]
-git = "git://nekomaru-ubuntu/Nekomaru-Rust.git"
-rev = "44ac38e6"
+path = "crates/enumerate-windows"
 
 [workspace.dependencies.winit]
 version = "0.30.9"

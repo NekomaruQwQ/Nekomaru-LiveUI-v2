@@ -1,0 +1,16 @@
+[package]
+name = "enumerate-windows"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
