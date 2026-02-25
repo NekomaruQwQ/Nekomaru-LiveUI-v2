@@ -1,9 +1,9 @@
-# Nekomaru LiveUI: H.264 Video Streaming
+# Nekomaru LiveUI
 
-**Low-latency (<100ms) screen capture streaming from DirectX11 to WebView**
+**Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: ✅ Encoding Pipeline Complete | ✅ Streaming Protocol Complete | ✅ Frontend Decoder Complete
-**Last Updated**: 2026-02-24
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | Architecture Refactoring In Progress
+**Last Updated**: 2026-02-25
 **Hardware**: RTX 5090 | Windows 11
 
 ---
@@ -12,11 +12,12 @@
 
 - [Quick Start](#quick-start)
 - [Architecture Overview](#architecture-overview)
+- [IPC Wire Protocol](#ipc-wire-protocol)
+- [HTTP API](#http-api)
 - [Implementation Status](#implementation-status)
 - [Performance Metrics](#performance-metrics)
-- [Key Components](#key-components)
+- [Encoding Pipeline Reference](#encoding-pipeline-reference)
 - [Bugs Fixed & Learnings](#bugs-fixed--learnings)
-- [Next Steps](#next-steps)
 - [File Structure](#file-structure)
 - [Testing Checklist](#testing-checklist)
 
@@ -24,125 +25,254 @@
 
 ## Quick Start
 
-### What Works Now ✅
-
 ```bash
+# Build the Rust executables
 cargo build --release
-cargo run
-```
 
-**You'll see:**
-- Window captures your IDE/desktop
-- Encoding thread processes frames at 60fps
-- Console logs NAL units: `SPS(27B) + PPS(8B) + IDR(67KB)` then `P-frames(1.5-30KB)`
-- StreamManager buffers encoded frames (60 frame circular buffer)
-- Video displays in webview via WebCodecs decoder
+# Start the server (serves frontend + manages captures)
+cd server && bun run dev
+
+# (Optional) Launch the webview host with locked aspect ratio
+cargo run -p live-app
+
+# Or just open http://localhost:3000 in any browser
+```
 
 ---
 
 ## Architecture Overview
 
-### "Bakery Model" Design
+### Multi-Executable Design
 
-We use a producer-consumer pattern where the UI thread continuously "restocks" a staging texture that the encoding thread reads from at a constant rate.
+The project is split into three independently running components. The hard work (GPU capture + hardware encoding) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ UI THREAD (Producer / "The Cook")                               │
+│ live-capture.exe  (Rust)                                        │
 │                                                                  │
-│  RedrawRequested Event Loop (60+ fps)                           │
-│    ↓                                                             │
-│  Windows Graphics Capture Update                                │
-│    ↓                                                             │
-│  Resample Pass (scale to 1920x1200, set viewport!)              │
-│    ↓                                                             │
-│  Write to "Shelf" → staging_bgra8 texture                       │
-│    ↓                                                             │
-│  GPU Flush() + sleep(5ms)  ← ensure GPU completes               │
-│    ↓                                                             │
-│  request_redraw() → loop                                        │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ↓ (shared texture)
-┌─────────────────────────────────────────────────────────────────┐
-│ "THE SHELF" (staging_bgra8)                                     │
-│  - Always contains latest captured frame                        │
-│  - D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE       │
-│  - Read by encoding thread, written by UI thread                │
-└────────────────────┬────────────────────────────────────────────┘
-                     │
-                     ↓ (read at 60fps)
-┌─────────────────────────────────────────────────────────────────┐
-│ ENCODING THREAD (Consumer / "The Customer")                     │
+│  One instance per captured window.                               │
+│  Spawned by LiveServer as a child process.                       │
 │                                                                  │
-│  Async MFT Event Loop (blocking GetEvent)                       │
+│  Windows Graphics Capture                                        │
 │    ↓                                                             │
-│  METransformNeedInput → read from shelf                         │
+│  Resample (scale to target resolution, set viewport)             │
 │    ↓                                                             │
-│  BGRA → NV12 Conversion (ID3D11VideoProcessor)                  │
+│  BGRA → NV12 (ID3D11VideoProcessor, GPU)                        │
 │    ↓                                                             │
-│  GPU Flush() ← ensure conversion completes                      │
+│  H.264 Encode (NVENC async MFT, hardware)                       │
 │    ↓                                                             │
-│  Feed NV12 to H.264 Encoder (WMF async MFT)                     │
-│    ↓                                                             │
-│  METransformHaveOutput → parse NAL units                        │
-│    ↓                                                             │
-│  Push to StreamManager (lock-free queue)                        │
-└─────────────────────────────────────────────────────────────────┘
-                     │
-                     ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ STREAM MANAGER                                                   │
-│  - 60-frame circular buffer (crossbeam::ArrayQueue)             │
-│  - Caches SPS/PPS from IDR frames                               │
-│  - Sequence numbering for long-polling                          │
+│  Binary frame messages → stdout                                  │
 └────────────────────┬────────────────────────────────────────────┘
                      │
+                     │ stdout (binary wire protocol)
                      ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ HTTP PROTOCOL HANDLER (http://stream.localhost/)                │
-│  - /init → JSON {sps, pps, width, height}                       │
-│  - /stream?after=N → JSON {frames: [{sequence, data}, ...]}     │
+│ LiveServer  (TypeScript, Hono on Bun)                            │
+│                                                                  │
+│  Process Manager                                                 │
+│    - Spawns / kills live-capture.exe instances                   │
+│    - Reads their stdout, parses binary frames                    │
+│                                                                  │
+│  Stream Buffer (per capture)                                     │
+│    - Circular buffer (~60 frames, ~1 second)                     │
+│    - Caches SPS/PPS from IDR frames for new clients              │
+│    - Sequence numbering for polling                              │
+│                                                                  │
+│  HTTP API                                                        │
+│    - /streams             → list / create / delete captures      │
+│    - /streams/:id/init    → codec params (SPS, PPS, resolution)  │
+│    - /streams/:id/frames  → encoded frames (polling)             │
+│                                                                  │
+│  Frontend Server                                                 │
+│    - Proxies to Vite dev server (development)                    │
+│    - Serves static build (production)                            │
 └────────────────────┬────────────────────────────────────────────┘
                      │
+                     │ HTTP (localhost, preconfigured port)
                      ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│ FRONTEND (WebCodecs + Canvas)                                   │
-│  - H264Decoder class (VideoDecoder API + avcC descriptor)       │
-│  - StreamRenderer component (Canvas rendering + frame.close())  │
+│ Browser / live-app.exe                                           │
+│                                                                  │
+│  Any browser works. live-app.exe is an optional thin wry         │
+│  webview host that locks the window aspect ratio for streaming.  │
+│                                                                  │
+│  Frontend (Preact + WebCodecs)                                   │
+│    - H264Decoder (avcC descriptor, Annex B → AVCC conversion)    │
+│    - StreamRenderer (Canvas rendering, ~60fps polling)           │
+│    - Multiple viewers can connect to the same stream             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why This Model?**
-- **Simpler**: No `mpsc` channels, no complex event passing
-- **Natural**: UI updates shelf whenever ready, encoder reads at constant rate
-- **Efficient**: GPU operations are async anyway, no CPU→CPU copies
-- **Trade-off**: Encoder may encode same frame twice if UI is slow (acceptable for live streaming)
+### Why This Split?
+
+| Concern | Decision | Rationale |
+|---------|----------|-----------|
+| GPU capture + encoding | Rust (`live-capture`) | Requires `unsafe` Windows APIs, hardware access, zero-copy GPU pipelines. No alternative. |
+| HTTP server + stream management | TypeScript (Hono on Bun) | Pure I/O multiplexing — shuttles bytes from child processes to HTTP clients. Dev velocity (hot reload) matters far more than soundness here. |
+| Webview host | Rust (`live-app`, optional) | Tiny wry wrapper for aspect-ratio-locked window. Could also just use a browser. |
+| IPC | Child process stdout | Zero config, natural lifetime (process death = stream death), trivially testable (`live-capture > dump.bin`). |
+
+### Why Not a Monolith?
+
+The previous monolith (`src/app.rs`) mixed window events, GPU capture, encoding, HTTP protocol handling, and webview hosting in one process. It worked, but:
+
+- **Can't view in a normal browser** (wry custom protocol only)
+- **Can't run multiple captures** (single encoding thread)
+- **Can't iterate on the server/API** without recompiling Rust
+- **Can't develop frontend** without the full Rust app running
+
+---
+
+## IPC Wire Protocol
+
+`live-capture.exe` writes length-prefixed binary messages to stdout. LiveServer reads and parses them.
+
+### Message Format
+
+```
+[u8:  message_type]
+[u32 LE: payload_length]
+[payload_length bytes: payload]
+```
+
+### Message Types
+
+#### `0x01` — CodecParams
+
+Sent once after encoder initialization, and again on any IDR frame if parameters change.
+
+```
+[u16 LE: width]
+[u16 LE: height]
+[u16 LE: sps_length]
+[sps_length bytes: SPS NAL data]
+[u16 LE: pps_length]
+[pps_length bytes: PPS NAL data]
+```
+
+#### `0x02` — Frame
+
+Sent for every encoded frame.
+
+```
+[u64 LE: timestamp_us]
+[u8: is_keyframe (0 or 1)]
+[u32 LE: num_nal_units]
+For each NAL unit:
+    [u8: nal_type]
+    [u32 LE: data_length]
+    [data_length bytes: NAL data with Annex B start code]
+```
+
+#### `0xFF` — Error
+
+Non-fatal error. Fatal errors are signaled by process exit.
+
+```
+[payload_length bytes: UTF-8 error message]
+```
+
+### CLI Interface
+
+```bash
+# Spawn a capture for a specific window
+live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200
+
+# Capture the primary monitor's active window
+live-capture.exe --width 1920 --height 1200
+
+# Dump to file for debugging
+live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200 > capture_dump.bin
+```
+
+Logging goes to stderr.
+
+---
+
+## HTTP API
+
+Served by LiveServer (Hono on Bun). Port is preconfigured via environment variable or hardcoded default.
+
+### Stream Management
+
+**`GET /streams`** — List active capture streams.
+
+```json
+[
+    { "id": "abc123", "windowTitle": "Visual Studio Code", "width": 1920, "height": 1200, "status": "running" }
+]
+```
+
+**`POST /streams`** — Create a new capture (spawns a `live-capture.exe` instance).
+
+```json
+// Request
+{ "hwnd": "0x1A2B3C", "width": 1920, "height": 1200 }
+
+// Response
+{ "id": "abc123" }
+```
+
+**`DELETE /streams/:id`** — Stop and remove a capture (kills the child process).
+
+### Stream Data
+
+**`GET /streams/:id/init`** — Codec parameters for decoder initialization.
+
+```json
+{
+    "sps": "<base64>",
+    "pps": "<base64>",
+    "width": 1920,
+    "height": 1200
+}
+```
+
+**`GET /streams/:id/frames?after=N`** — Encoded frames after sequence number N.
+
+```json
+{
+    "frames": [
+        { "sequence": 123, "data": "<base64>", "keyframe": false },
+        { "sequence": 124, "data": "<base64>", "keyframe": false }
+    ]
+}
+```
+
+The base64 `data` field contains the same binary frame format as the IPC protocol's Frame message.
 
 ---
 
 ## Implementation Status
 
-### ✅ Completed (Backend Encoding Pipeline)
+### Completed (`live-capture` crate — `service/capture/`)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Format Converter** | `src/converter.rs` | ✅ Done | GPU-accelerated BGRA→NV12 via `ID3D11VideoProcessor` |
-| **H.264 Encoder** | `src/encoder.rs` | ✅ Done | Async MFT with low-latency settings, NAL parsing |
-| **Encoder Helpers** | `src/encoder/helper.rs` | ✅ Done | Finds NVIDIA NVENC encoder (hardcoded) |
-| **Debug Logging** | `src/encoder/debug.rs` | ✅ Done | Prints supported media types |
-| **Stream Manager** | `src/stream.rs` | ✅ Done | Lock-free queue, SPS/PPS caching |
-| **Integration** | `src/app.rs` | ✅ Done | Spawns encoding thread, wires callbacks |
-| **Resampler** | `src/resample.rs` | ✅ Done | Scales captured frames with viewport set |
+| **IPC Protocol (lib)** | `service/capture/src/lib.rs` | Done | Wire protocol types (`NALUnit`, `CodecParams`, `FrameMessage`) + serialization/deserialization via `impl Write`/`impl Read`. Round-trip tested. |
+| **CLI + Orchestration** | `service/capture/src/main.rs` | Done | `--hwnd`, `--width`, `--height` CLI. Bakery model: capture thread + encoding thread → binary stdout. |
+| **D3D11 Helpers** | `service/capture/src/d3d11.rs` | Done | Device creation, texture/view factories (subset of monolith `app/helper.rs`) |
+| **Format Converter** | `service/capture/src/converter.rs` | Done | GPU-accelerated BGRA→NV12 via `ID3D11VideoProcessor`. Resolution now parameterized. |
+| **H.264 Encoder** | `service/capture/src/encoder.rs` | Done | Async MFT with low-latency settings, NAL parsing. Callbacks passed to `run()` (monomorphized, no `Box<dyn>`). |
+| **Encoder Helpers** | `service/capture/src/encoder/helper.rs` | Done | Finds NVIDIA NVENC encoder |
+| **Debug Logging** | `service/capture/src/encoder/debug.rs` | Done | Prints supported media types |
+| **Resampler** | `service/capture/src/resample.rs` | Done | Scales captured frames with viewport set |
+| **Capture** | `service/capture/src/capture.rs` | Done | Windows Graphics Capture wrapper + viewport calculation |
 
-### ✅ Completed (Streaming & Frontend)
+### Completed (Frontend Decoder)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Protocol Handler** | `src/app.rs` | ✅ Done | HTTP via `http://stream.localhost/` (wry WebView2 pattern) |
-| **Frontend Decoder** | `frontend/streamDecoder.ts` | ✅ Done | H264Decoder with WebCodecs, avcC descriptor, Annex B → AVCC conversion |
-| **Frontend Renderer** | `frontend/streamRenderer.tsx` | ✅ Done | StreamRenderer with Canvas, ~60fps polling |
-| **Integration** | `frontend/app.tsx` | ✅ Done | StreamRenderer integrated in Card |
+| **Frontend Decoder** | `frontend/streamDecoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor |
+| **Frontend Renderer** | `frontend/streamRenderer.tsx` | Done | StreamRenderer with Canvas, ~60fps polling |
+
+### Planned (Architecture Refactoring)
+
+| Component | Location | Status | Notes |
+|-----------|----------|--------|-------|
+| **LiveServer** | `server/` | Planned | Hono on Bun, process manager + HTTP API + stream buffering |
+| **live-app** | `app/` | Planned | Minimal wry webview host, aspect ratio lock |
+| **Frontend updates** | `frontend/` | Planned | Point at real HTTP API instead of `stream.localhost` |
 
 ---
 
@@ -159,20 +289,22 @@ We use a producer-consumer pattern where the UI thread continuously "restocks" a
 | GPU Flush | 1-2ms | `Flush()` |
 | H.264 Encode | 5-15ms | NVENC hardware encoder |
 | NAL Parse | <0.1ms | CPU Annex B parsing |
-| **Total** | **12-35ms** | ✅ Well under 100ms target |
+| IPC (stdout) | <0.1ms | Pipe buffer, same machine |
+| HTTP response | <1ms | Localhost |
+| **Total** | **13-36ms** | Well under 100ms target |
 
 ### Frame Sizes (1920x1200 @ 8 Mbps CBR)
 
 | Frame Type | Size Range | Scenario |
 |------------|------------|----------|
-| **IDR (first frame)** | ~67 KB | SPS(27B) + PPS(8B) + full I-frame |
+| **IDR (keyframe)** | ~67 KB | SPS(27B) + PPS(8B) + full I-frame |
 | **P-frame (static)** | 1.5-10 KB | Mostly unchanged screen content |
 | **P-frame (typing/scrolling)** | 10-30 KB | Text editing, web browsing |
 | **P-frame (high motion)** | 30-50 KB | Video playback, animations |
 
 **Red Flags:**
-- 🚨 12-byte P-frames → Empty/black frames (viewport bug)
-- 🚨 9KB IDR → Possible empty first frame
+- 12-byte P-frames → Empty/black frames (viewport bug)
+- 9KB IDR → Possible empty first frame
 
 ### Encoding Settings
 
@@ -187,461 +319,220 @@ We use a producer-consumer pattern where the UI thread continuously "restocks" a
 
 ---
 
-## Key Components
+## Encoding Pipeline Reference
 
-### 1. Format Converter (`src/converter.rs`)
+### Format Converter (`service/capture/src/converter.rs`)
 
-**Purpose**: GPU-accelerated BGRA→NV12 conversion
-**Why**: Hardware H.264 encoders require NV12 input
+GPU-accelerated BGRA→NV12 conversion via `ID3D11VideoProcessor`. Hardware H.264 encoders require NV12 input.
 
-```rust
-pub struct NV12Converter {
-    device: ID3D11VideoDevice,
-    device_context: ID3D11VideoContext,
-    processor: ID3D11VideoProcessor,
-    enumerator: ID3D11VideoProcessorEnumerator,
-}
+Performance: ~0.5-1ms for 1920x1200.
 
-impl NV12Converter {
-    pub fn convert(
-        &mut self,
-        bgra_texture: &ID3D11Texture2D,
-        nv12_texture: &ID3D11Texture2D
-    ) -> anyhow::Result<()> {
-        // Creates input/output views
-        // Calls VideoProcessorBlt()
-        // Returns immediately (GPU async)
-    }
-}
-```
+### H.264 Encoder (`service/capture/src/encoder.rs`)
 
-**Performance**: ~0.5-1ms for 1920x1200
+Async Media Foundation Transform (MFT). Runs a blocking event loop:
 
-### 2. H.264 Encoder (`src/encoder.rs`)
+- `METransformNeedInput` → read from staging texture, convert, feed to encoder
+- `METransformHaveOutput` → parse NAL units, write to stdout
 
-**Purpose**: Encode NV12 frames to H.264 NAL units
-**Type**: Async Media Foundation Transform (MFT)
+NAL unit types: SPS(7) ~27B, PPS(8) ~8B, IDR(5) ~67KB, NonIDR(1) ~1.5-30KB.
 
-```rust
-pub struct H264Encoder {
-    mf_transform: IMFTransform,
-    mf_event_generator: IMFMediaEventGenerator,
-    config: H264EncoderConfig,
-    // ...
-}
+### "Bakery Model" (Capture Thread ↔ Encoding Thread)
 
-pub struct H264EncoderConfig {
-    pub frame_size: Size2D<u32>,
-    pub frame_rate: u32,
-    pub bitrate: u32,
-    pub frame_source_callback: Box<dyn FnMut() -> ID3D11Texture2D>,
-    pub frame_target_callback: Box<dyn FnMut(Vec<NALUnit>)>,
-}
-```
+Within `live-capture.exe`, the capture thread (main) and encoding thread share a staging texture ("the shelf"). The capture thread continuously restocks it with the latest captured frame; the encoding thread reads at a constant 60fps. No channels, no CPU copies — just a shared GPU texture with `Flush()` synchronization.
 
-**Event Loop**:
-```rust
-pub fn run(mut self) {
-    loop {
-        let event = self.mf_event_generator.GetEvent(default())?;
-        match event.GetType()? {
-            METransformNeedInput => self.process_input()?,   // Read from shelf → encode
-            METransformHaveOutput => self.process_output()?, // Parse NAL → callback
-            _ => {}
-        }
-    }
-}
-```
-
-**NAL Unit Types**:
-- `SPS(7)` - Sequence Parameter Set (~27 bytes)
-- `PPS(8)` - Picture Parameter Set (~8 bytes)
-- `IDR(5)` - Keyframe (~67 KB)
-- `NonIDR(1)` - P-frame (~1.5-30 KB)
-
-### 3. Stream Manager (`src/stream.rs`)
-
-**Purpose**: Thread-safe circular buffer for encoded frames
-
-```rust
-pub struct StreamManager {
-    frame_queue: Arc<crossbeam::queue::ArrayQueue<StreamFrame>>,
-    codec_params: Arc<Mutex<Option<CodecParams>>>,
-    sequence_counter: AtomicU64,
-}
-
-pub struct StreamFrame {
-    pub sequence: u64,
-    pub nal_units: Vec<NALUnit>,
-    pub timestamp_us: u64,
-    pub is_keyframe: bool,
-}
-```
-
-**Features**:
-- **Capacity**: 60 frames (~1 second buffer at 60fps)
-- **Overflow**: Drops oldest frame (live streaming behavior)
-- **SPS/PPS caching**: Extracts from IDR frames for new clients
-- **Non-blocking**: `get_frames(after_sequence)` returns immediately; frontend polls at ~60fps
-
-### 4. Protocol Handler (`src/app.rs`)
-
-**Endpoint**: `http://stream.localhost/` (wry WebView2 pattern)
-
-**`/init`** - Returns codec parameters for decoder initialization:
-```json
-{
-    "sps": "<base64>",
-    "pps": "<base64>",
-    "width": 1920,
-    "height": 1200
-}
-```
-
-**`/stream?after=N`** - Returns frames after sequence N:
-```json
-{
-    "frames": [
-        { "sequence": 123, "data": "<base64>" },
-        { "sequence": 124, "data": "<base64>" }
-    ]
-}
-```
-
-**Binary frame format** (inside base64 `data`):
-```
-[u64 LE: timestamp_us]
-[u32 LE: num_nal_units]
-For each NAL unit:
-    [u8: nal_type]
-    [u32 LE: data_length]
-    [data_length bytes: NAL data with Annex B start code]
-```
-
-### 5. Integration (`src/app.rs`)
-
-**UI Thread** (`on_window_event`):
-```rust
-WindowEvent::RedrawRequested => {
-    self.main_capture.update();
-    let source_texture = self.main_capture.frame_buffer();
-
-    // Set viewport (CRITICAL!)
-    let viewport = D3D11_VIEWPORT { /* ... */ };
-    self.device_context.RSSetViewports(Some(&[viewport]));
-
-    // Resample to staging texture ("restock shelf")
-    self.resampler.resample(&self.device_context, &source_view, &staging_rtv);
-
-    // Flush GPU to ensure completion
-    unsafe { self.device_context.Flush(); }
-    thread::sleep(Duration::from_millis(5));
-
-    // Loop
-    self.main_window.request_redraw();
-}
-```
-
-**Encoding Thread** (spawned in `LiveApp::new()`):
-```rust
-thread::Builder::new()
-    .name("Encoding Thread".to_owned())
-    .spawn(move || {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok()?;
-
-        H264Encoder::new(&device, H264EncoderConfig {
-            frame_size: (1920, 1200).into(),
-            frame_rate: 60,
-            bitrate: 8_000_000,
-
-            frame_source_callback: Box::new(move || {
-                // Read from "shelf" and convert
-                nv12_converter.convert(&staging_bgra8, &staging_nv12)?;
-                staging_nv12.clone()
-            }),
-
-            frame_target_callback: Box::new(move |nal_units| {
-                // Push to stream manager
-                stream_manager.push_frame(nal_units)?;
-            }),
-        })?.run();
-    })?;
-```
+**Trade-off**: Encoder may encode the same frame twice if capture is slow. Acceptable for live streaming.
 
 ---
 
 ## Bugs Fixed & Learnings
 
-### 🐛 Bug #1: Codec API Settings Order
+### Bug #1: Codec API Settings Order
 
-**Problem**: Setting `ICodecAPI::SetValue()` before media types → "parameter is incorrect" error
+**Problem**: `ICodecAPI::SetValue()` before media types → "parameter is incorrect"
 
-**Root Cause**: Encoder can't validate codec settings without knowing resolution, frame rate, format
+**Fix**: Set media types first, then codec API values. Correct order:
+1. Output media type (H.264, resolution, frame rate, bitrate, profile)
+2. Input media type (NV12, resolution, frame rate)
+3. D3D manager (attach GPU device)
+4. Codec API values (B-frames, GOP, latency mode, rate control)
+5. Start streaming
 
-**Fix**: Correct order:
-```rust
-// ✅ CORRECT ORDER:
-1. Set output media type (H.264, resolution, frame rate, bitrate, profile)
-2. Set input media type (NV12, resolution, frame rate)
-3. Set D3D manager (attach GPU device)
-4. Set codec API values (B-frames, GOP, latency mode, rate control)
-5. Start streaming (BEGIN_STREAMING, START_OF_STREAM)
-```
+### Bug #2: VARIANT Type Mismatch
 
-**Location**: `src/encoder.rs:127-184`
+**Problem**: B-frame count setting failed with `VT_UI4`.
 
----
+**Fix**: Use `i32` (signed) for all codec API values: `VARIANT::from(0i32)`.
 
-### 🐛 Bug #2: VARIANT Type Mismatch
+### Bug #3: Missing Viewport → Empty Frames
 
-**Problem**: B-frame count setting failed despite docs saying `VT_UI4`
+**Problem**: All P-frames were 12 bytes (black frames). Resampler didn't set viewport → GPU clipped fullscreen triangle → empty output.
 
-**Root Cause**: Unclear, but most codec APIs prefer signed integers
+**Fix**: Always set `RSSetViewports()` before draw calls.
 
-**Fix**: Use `i32` for all codec API values:
-```rust
-// ❌ FAILED:
-VARIANT::from(0u32)
+**Lesson**: D3D11 draw calls require explicit viewport, scissor, and render target setup.
 
-// ✅ WORKS:
-VARIANT::from(0i32)
-```
+### Bug #4: GPU Synchronization
 
-**Note**: B-frame setting may still fail on NVIDIA (Baseline profile makes it redundant anyway)
+**Problem**: Encoder reading stale/empty frames from staging texture.
 
-**Location**: `src/encoder.rs:169-179`
+**Fix**: Call `Flush()` after GPU operations + small sleep:
+- UI thread after resample: `Flush()` + `sleep(5ms)`
+- Encoding thread after NV12 conversion: `Flush()`
 
----
-
-### 🐛 Bug #3: Missing Viewport → Empty Frames
-
-**Problem**: All P-frames were exactly 12 bytes (black frames compressing to nothing)
-
-**Root Cause**: Resampler didn't set viewport → GPU clipped fullscreen triangle → empty output texture
-
-**Symptoms**:
-- First frame: IDR ~9KB (should be 67KB)
-- P-frames: 12 bytes (should be 1.5-30KB)
-- No variation in frame sizes
-
-**Fix**: Always set viewport before draw calls:
-```rust
-let viewport = D3D11_VIEWPORT {
-    TopLeftX: 0.0,
-    TopLeftY: 0.0,
-    Width: 1920.0,
-    Height: 1200.0,
-    MinDepth: 0.0,
-    MaxDepth: 1.0,
-};
-unsafe { device_context.RSSetViewports(Some(&[viewport])); }
-```
-
-**Location**: `src/app.rs:216-227`
-
-**Lesson**: D3D11 draw calls require explicit viewport, scissor, and render target setup!
-
----
-
-### 🐛 Bug #4: GPU Synchronization
-
-**Problem**: Encoder reading stale/empty frames from staging texture
-
-**Root Cause**: GPU operations are async; `sleep()` on CPU doesn't guarantee GPU completion
-
-**Fix**: Call `Flush()` after GPU operations + small sleep for execution time:
-```rust
-// UI thread after resample:
-unsafe { self.device_context.Flush(); }
-thread::sleep(Duration::from_millis(5));
-
-// Encoding thread after NV12 conversion:
-unsafe { self.device_context.Flush(); }
-```
-
-**Why Both?**:
-- UI thread: Ensure resample completes before encoder reads
-- Encoding thread: Ensure conversion completes before encoder processes
-
-**Alternative** (not implemented): Use D3D11 queries/fences for proper synchronization
-
-**Location**: `src/app.rs:231`, `src/converter.rs:125`
-
----
-
-### 💡 Design Choice: "Bakery Model"
-
-**Alternative Considered**: Event-driven with `mpsc` channels
-
-```rust
-// REJECTED APPROACH:
-UI Thread:
-  capture.update()
-  resample()
-  channel.send(texture_copy)  // ← CPU copy overhead
-
-Encoding Thread:
-  let texture = channel.recv()?
-  convert(texture)
-  encode(texture)
-```
-
-**Why We Chose Bakery Model:**
-1. **No CPU copies**: Encoder reads GPU texture directly
-2. **Simpler code**: No channel management, no complex synchronization
-3. **GPU-native**: Leverages async GPU operations naturally
-4. **Acceptable trade-off**: Re-encoding same frame occasionally is fine for live streaming
-
-**When Event-Driven Makes Sense:**
-- Recording to file (every frame must be unique)
-- Variable frame rates (capture at 30fps, encode at 60fps)
-- Multiple consumers (need to distribute same frame to multiple encoders)
-
----
-
-## Next Steps
-
-### Future Enhancements
-
-**Lower Priority**:
-- 🔮 Dynamic encoder selection (fallback Intel QSV / AMD VCE if NVIDIA not available)
-- 🔮 Adaptive bitrate based on scene complexity (QP feedback loop)
-- 🔮 Multiple capture sources (picture-in-picture, multi-monitor)
-- 🔮 Recording to MP4 file (add ffmpeg or manual MP4 muxer)
-- 🔮 Text/image overlays before encoding
-- 🔮 Dynamic resolution (respond to window resize)
+**Alternative** (not yet implemented): D3D11 queries/fences for proper synchronization.
 
 ---
 
 ## File Structure
 
 ```
-LiveUI/
-├── Cargo.toml               # Dependencies: crossbeam, base64, serde_json, wry, windows
-├── docs/
-│   └── readme.md            # ← YOU ARE HERE
+Nekomaru-LiveUI-v2/
+├── Cargo.toml                       # Workspace root
 │
-├── src/
-│   ├── main.rs              # Entry point, logger init
-│   ├── app.rs               # ✅ Main app, window events, encoding thread, protocol handler
-│   ├── app/
-│   │   └── helper.rs        # ✅ Device creation, ApplicationHandler
-│   ├── capture.rs           # ✅ Windows Graphics Capture wrapper
-│   ├── converter.rs         # ✅ NV12Converter (BGRA→NV12 GPU)
-│   ├── encoder.rs           # ✅ H264Encoder (async MFT, NAL parsing)
-│   ├── encoder/
-│   │   ├── helper.rs        # ✅ Encoder enumeration, media type config
-│   │   └── debug.rs         # ✅ Media type logging utilities
-│   ├── resample.rs          # ✅ BGRA scaling shader (with viewport!)
-│   └── stream.rs            # ✅ StreamManager (lock-free queue, non-blocking)
+├── app/                             # live-app.exe — webview host (Rust, wry)
+│   ├── Cargo.toml
+│   └── src/
+│       └── main.rs                  # Opens webview to localhost, locks aspect ratio
 │
-└── frontend/
-    ├── index.tsx            # ✅ Entry point
-    ├── app.tsx              # ✅ Main Preact app with StreamRenderer
-    ├── streamDecoder.ts     # ✅ H264Decoder (WebCodecs + avcC), parseStreamFrame
-    ├── streamRenderer.tsx   # ✅ StreamRenderer (Canvas + polling loop)
-    └── debug.ts             # ✅ Debug flags
+├── service/
+│   └── capture/                     # live-capture.exe + live_capture lib (Rust)
+│       ├── Cargo.toml               # Emits both [[bin]] and [lib]
+│       └── src/
+│           ├── lib.rs               # IPC protocol types + serialization (public API)
+│           ├── main.rs              # CLI args, orchestrates capture → encode → stdout
+│           ├── d3d11.rs             # D3D11 device + texture/view creation helpers
+│           ├── capture.rs           # Windows Graphics Capture wrapper + viewport calc
+│           ├── converter.rs         # NV12Converter (BGRA→NV12, GPU, parameterized)
+│           ├── encoder.rs           # H264Encoder (async MFT, NAL parsing)
+│           ├── encoder/
+│           │   ├── helper.rs        # Encoder enumeration (NVIDIA preference)
+│           │   └── debug.rs         # Media type logging utilities
+│           ├── resample.rs          # BGRA scaling shader
+│           └── resample.hlsl        # Fullscreen triangle vertex/pixel shaders
+│
+├── server/                          # LiveServer — HTTP server (TypeScript, Hono on Bun)
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── src/
+│       ├── index.ts                 # Entry point, Hono app setup
+│       ├── streams.ts               # Stream management routes
+│       ├── process.ts               # Spawn/manage live-capture.exe child processes
+│       ├── buffer.ts                # Per-stream circular frame buffer + SPS/PPS cache
+│       └── protocol.ts             # Parse binary wire format from stdout
+│
+└── frontend/                        # Frontend (Preact + Vite)
+    ├── package.json
+    ├── vite.config.ts
+    ├── index.tsx                     # Entry point
+    ├── app.tsx                       # Main app with StreamRenderer
+    ├── streamDecoder.ts              # H264Decoder (WebCodecs + avcC)
+    ├── streamRenderer.tsx            # StreamRenderer (Canvas + polling)
+    └── debug.ts                      # Debug flags
 ```
-
-**Note**: No `encoding_thread.rs` - logic is inlined in `app.rs::LiveApp::new()`
 
 ---
 
 ## Testing Checklist
 
-### ✅ Encoding Pipeline (Complete)
+### Encoding Pipeline (Complete)
 
 - [x] Encoder initializes successfully
-- [x] Low-latency settings applied (Baseline profile, CBR, GOP=120, low latency mode)
-- [x] B-frame setting attempts but may fail on NVIDIA (Baseline prohibits anyway)
-- [x] SPS/PPS generated on first frame (~27B + 8B) ✅
-- [x] IDR frame reasonable size (~67 KB for 1920x1200) ✅
-- [x] P-frames vary with screen content (1.5-30 KB) ✅
-- [x] NAL units logged correctly (types and sizes) ✅
-- [x] StreamManager receives and buffers frames ✅
-- [x] Viewport set before resample (no more 12-byte P-frames!) ✅
-- [x] GPU synchronization working (Flush + sleep) ✅
+- [x] Low-latency settings applied (Baseline, CBR, GOP=120)
+- [x] SPS/PPS generated on first frame (~27B + 8B)
+- [x] IDR frame reasonable size (~67 KB for 1920x1200)
+- [x] P-frames vary with screen content (1.5-30 KB)
+- [x] Viewport set before resample (no more 12-byte P-frames)
+- [x] GPU synchronization working (Flush + sleep)
 
-### ✅ Streaming Protocol (Complete)
-
-- [x] `/init` returns valid JSON `{sps, pps, width, height}`
-- [x] `/stream?after=N` returns JSON `{frames: [{sequence, data}, ...]}`
-- [x] Sequence numbers increment monotonically
-- [x] Keyframe flag matches NAL unit type (IDR=true, NonIDR=false)
-- [x] Base64 encoding of SPS/PPS and frame data works
-- [x] Binary frame format (inside base64 data) parses correctly on frontend
-
-### ✅ Frontend Decoder (Complete)
+### Frontend Decoder (Complete)
 
 - [x] WebCodecs `VideoDecoder` initializes with avcC descriptor
-- [x] Codec string dynamically built from SPS (profile/constraints/level)
-- [x] Annex B → AVCC conversion (strip start codes, add length prefixes)
-- [x] Decodes IDR frames successfully
-- [x] Decodes P-frames successfully
+- [x] Codec string dynamically built from SPS
+- [x] Annex B → AVCC conversion
+- [x] Decodes IDR and P-frames successfully
 - [x] No memory leaks (`frame.close()` called after render)
 
-### ⏳ End-to-End (Pending)
+### Architecture Refactoring (In Progress)
 
-- [ ] Video displays in webview
+- [x] `live-capture.exe` runs standalone and writes binary frames to stdout
+- [x] IPC wire protocol round-trip tested (Rust serialization + deserialization)
+- [ ] Stdout wire protocol parses correctly in TypeScript
+- [ ] LiveServer spawns and manages `live-capture.exe` instances
+- [ ] HTTP API serves codec params and frame data
+- [ ] Multiple browsers can connect to the same stream
+- [ ] `live-app.exe` opens webview to localhost with locked aspect ratio
+- [ ] Frontend works in both webview and regular browser
+
+### End-to-End (Pending)
+
+- [ ] Video displays in browser
 - [ ] Video content matches captured window
-- [ ] Latency < 100ms (measure with screen flash test)
-- [ ] 60fps playback (smooth motion, no stuttering)
+- [ ] Latency < 100ms
+- [ ] 60fps playback (smooth, no stuttering)
 - [ ] No frame drops under normal load
-- [ ] Handles window resize gracefully
 - [ ] Handles long runs (10+ minutes) without memory leak
 - [ ] CPU usage reasonable (NVENC should be low CPU)
-- [ ] GPU usage visible in Task Manager
 
 ---
 
 ## Known Issues
 
-### 1. Hardcoded NVIDIA Encoder ⚠️
-**Location**: `src/encoder/helper.rs:107`
-**Issue**: Only selects encoders with "nvidia" in name
-**Impact**: Fails on Intel/AMD systems
-**Priority**: Low (personal use, RTX 5090 exclusive)
-**Workaround**: Manually edit to match your GPU vendor
+### 1. Hardcoded NVIDIA Encoder
 
-### 2. Hardcoded Resolution ⚠️
-**Location**: `src/app.rs:63` (`STREAM_FRAME_SIZE = 1920x1200`)
-**Issue**: Fixed resolution, can't adapt to different monitors
-**Impact**: Wrong aspect ratio on other displays
-**Priority**: Low (matches current monitor)
-**Workaround**: Edit constant to match your resolution
+Only selects encoders with "nvidia" in name. Fails on Intel/AMD.
+**Priority**: Low (personal use, RTX 5090).
 
-### 3. No Error Recovery ⚠️
-**Issue**: Encoding errors cause panic (`.unwrap()` / `.expect()`)
-**Impact**: App crashes on encoding failure instead of graceful degradation
-**Priority**: Medium (should skip frames and log instead)
-**Example**: `src/encoder.rs:263` - `.unwrap()` on process_input
+### 2. ~~Hardcoded Resolution~~ (Fixed)
+
+Resolution is now configurable via `--width` and `--height` CLI args in `live-capture.exe`. The monolith (`src/`) still hardcodes 1920x1200.
+
+### 3. No Error Recovery
+
+Encoding errors cause panic (`.unwrap()` / `.expect()`).
+**Priority**: Medium. Should skip frames and log to stderr instead.
 
 ---
 
 ## Dependencies
 
+### live-capture (Rust)
+
 ```toml
 [dependencies]
-base64 = "0.22"              # Base64 encoding for SPS/PPS in JSON
-crossbeam = "0.8"            # Lock-free ArrayQueue for StreamManager
+nkcore = { features = ["debug"] }   # Common utilities, macros, euclid re-export
+ngd3dcompile = { ... }              # Compile-time HLSL shader compilation
+winrt-capture = { ... }             # Windows Graphics Capture wrapper
 log = "0.4"
-pretty-name = "0.4"          # Method name formatting for errors
 pretty_env_logger = "0.5"
-serde_json = "1"             # JSON serialization for /init and /stream endpoints
-widestring = "1.2"           # UTF-16 string handling for Windows APIs
-winit = { version = "0.30", features = ["rwh_06"] }
-wry = { version = "0.53", features = ["protocol"] }  # Custom protocol support
-windows = { version = "0.61", features = [
+pretty-name = "0.4"
+widestring = "1.2"
+windows = { version = "0.62", features = [
     "Graphics_Capture",
     "Graphics_DirectX_Direct3D11",
     "Win32_Graphics_Direct3D11",
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",
-    # ... (full list in Cargo.toml)
+    # ...
 ]}
 ```
 
-**No additional dependencies needed** for current implementation ✅
+### live-app (Rust)
+
+```toml
+[dependencies]
+wry = "0.53"
+winit = { version = "0.30", features = ["rwh_06"] }
+```
+
+### LiveServer (TypeScript)
+
+```json
+{
+    "dependencies": {
+        "hono": "^4.x"
+    }
+}
+```
 
 ---
 
@@ -658,14 +549,9 @@ windows = { version = "0.61", features = [
 - [H.264 Specification](https://www.itu.int/rec/T-REC-H.264)
 - [ISO 14496-15 (AVC File Format)](https://www.iso.org/standard/55980.html)
 
-### Community Resources
-- [webm-wasm](https://github.com/GoogleChromeLabs/webm-wasm) - Similar approach with VP8/VP9
-- [Broadway.js](https://github.com/mbebenita/Broadway) - Pure JS H.264 decoder (slower, for compatibility)
-
 ---
 
-**Last Updated**: 2025-12-11
 **Author**: Nekomaru
-**Co-Pilot**: Claude Sonnet 4.5
-**Hardware**: NVIDIA GeForce RTX 5090 (don't @ me, Intel/AMD users 😎)
+**Co-Pilot**: Claude
+**Hardware**: NVIDIA GeForce RTX 5090
 **License**: Personal Use Only
