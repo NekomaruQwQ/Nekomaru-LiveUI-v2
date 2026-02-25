@@ -287,7 +287,7 @@ The base64 `data` field contains the same binary frame format as the IPC protoco
 | **Process Manager** | `server/process.ts` | Done | Spawns `live-capture.exe` via `Bun.spawn`. Wires stdout → ProtocolParser → StreamBuffer. Tracks lifecycle (starting → running → stopped). stderr forwarded with `[capture:id]` prefix. |
 | **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
 | **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. |
-| **Constants** | `server/common.ts` | Done | Port (`LIVE_UI_PORT` env or 3000), exe path, buffer capacity. |
+| **Constants** | `server/common.ts` | Done | Port (`LIVE_PORT` env or 3000), exe path, buffer capacity. |
 
 ### Completed (Frontend Updates)
 

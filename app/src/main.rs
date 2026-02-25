@@ -24,13 +24,13 @@ use wry::WebViewBuilder;
 
 const WINDOW_SIZE: PhysicalSize<u32> = PhysicalSize::new(1920, 1200);
 
-/// Reads `LIVE_UI_PORT` from the environment, panics if not set or invalid,
+/// Reads `LIVE_PORT` from the environment, panics if not set or invalid,
 /// and constructs the server URL.
 fn get_server_url() -> String {
-    let port = std::env::var("LIVE_UI_PORT")
+    let port = std::env::var("LIVE_PORT")
         .ok()
         .and_then(|port| port.parse::<u16>().ok())
-        .expect("LIVE_UI_PORT not set or is not a valid port number");
+        .expect("LIVE_PORT not set or is not a valid port number");
     format!("http://localhost:{port}")
 }
 

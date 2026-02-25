@@ -1,6 +1,8 @@
 import 'normalize.css';
-import './index.css'
+import './index.css';
 
-import * as preact from 'preact';
+import { createRoot } from 'react-dom/client';
+
 import { App } from './src/app';
-preact.render(<App />, document.getElementById('app')!);
+
+createRoot(document.getElementById('app')!).render(<App />);

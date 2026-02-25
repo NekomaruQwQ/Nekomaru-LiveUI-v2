@@ -18,9 +18,9 @@ import * as http from "node:http";
 import * as vite from "vite";
 import * as hono from "@hono/node-server";
 
-import { serverPort, baseUrl } from "@/common";
-import { destroyAll } from "@/process";
-import api from "@/api";
+import { serverPort, baseUrl } from "./common";
+import { destroyAll } from "./process";
+import api from "./api";
 
 // ── Hono app ─────────────────────────────────────────────────────────────────
 

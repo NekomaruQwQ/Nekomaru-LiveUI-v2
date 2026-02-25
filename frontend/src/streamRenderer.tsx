@@ -1,13 +1,14 @@
-import { useRef, useEffect } from 'preact/hooks';
 import { css } from '@emotion/css';
+import { useEffect, useRef } from 'react';
 
 import { DEBUG } from '../debug';
+import { api } from './api';
 import { H264Decoder, parseStreamFrame } from './streamDecoder';
 
 /**
  * Video renderer component that decodes and displays H.264 stream
  */
-export function StreamRenderer() {
+export function StreamRenderer({ streamId }: { streamId: string }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const decoderRef = useRef<H264Decoder | null>(null);
 
@@ -28,7 +29,7 @@ export function StreamRenderer() {
 
         console.log('StreamRenderer: Canvas ready: %dx%d', canvas.width, canvas.height);
 
-        const decoder = new H264Decoder((frame: VideoFrame) => {
+        const decoder = new H264Decoder(streamId, (frame: VideoFrame) => {
             renderFrame(canvas, ctx, frame);
         });
 
@@ -41,7 +42,7 @@ export function StreamRenderer() {
             .init()
             .then(() => {
                 console.log('StreamRenderer: Decoder initialized, starting stream loop');
-                startStreamLoop(decoder);
+                startStreamLoop(decoder, streamId);
             })
             .catch((e) => {
                 console.error('StreamRenderer: Failed to initialize decoder:', e);
@@ -51,7 +52,7 @@ export function StreamRenderer() {
             console.log('StreamRenderer: Component unmounting, closing decoder');
             decoder.close();
         };
-    }, []);
+    }, [streamId]);
 
     return (
         <canvas
@@ -108,7 +109,7 @@ function renderFrame(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, f
 /**
  * Stream loop that fetches and decodes frames
  */
-async function startStreamLoop(decoder: H264Decoder) {
+async function startStreamLoop(decoder: H264Decoder, streamId: string) {
     console.log('StreamLoop: Starting stream loop');
 
     let lastSequence = 0;
@@ -121,10 +122,13 @@ async function startStreamLoop(decoder: H264Decoder) {
             if (DEBUG.debugStreamRenderer) {
                 console.log('StreamLoop: Fetching frame after sequence %d', lastSequence);
             }
-            const response = await fetch(`http://stream.localhost/stream?after=${lastSequence}`);
+            const res = await api[":id"].frames.$get({
+                param: { id: streamId },
+                query: { after: String(lastSequence) },
+            });
 
-            if (!response.ok) {
-                console.error('StreamLoop: Stream request failed: %d %s', response.status, response.statusText);
+            if (!res.ok) {
+                console.error('StreamLoop: Stream request failed: %d %s', res.status, res.statusText);
                 await sleep(100);
                 consecutiveErrors++;
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
@@ -136,7 +140,8 @@ async function startStreamLoop(decoder: H264Decoder) {
 
             consecutiveErrors = 0;
 
-            const data = await response.json();
+            // Narrow from the response union to the success case (confirmed by res.ok).
+            const data = await res.json() as { frames: { sequence: number; data: string }[] };
             for (const frameInfo of data.frames) {
                 const sequence = frameInfo.sequence;
                 lastSequence = Math.max(lastSequence, sequence);

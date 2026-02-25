@@ -2,8 +2,8 @@
 
 import * as path from "node:path";
 
-/// HTTP server port. Reads `LIVE_UI_PORT` from the environment, falling back to 3000.
-export const serverPort = Number(process.env.LIVE_UI_PORT) || 3000;
+/// HTTP server port. Reads `LIVE_PORT` from the environment, falling back to 3000.
+export const serverPort = Number(process.env.LIVE_PORT) || 3000;
 
 /// Base URL for logging.
 export const baseUrl = `http://localhost:${serverPort}`;

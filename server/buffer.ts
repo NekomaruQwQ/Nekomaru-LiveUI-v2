@@ -15,7 +15,7 @@
 // Notably, the is_keyframe byte from the IPC wire format is NOT included —
 // the frontend infers keyframe status from NAL unit types.
 
-import type { CodecParams, FrameMessage } from "@/protocol";
+import type { CodecParams, FrameMessage } from "./protocol";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

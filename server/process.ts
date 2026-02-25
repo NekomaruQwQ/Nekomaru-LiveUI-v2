@@ -5,10 +5,10 @@
 // into a StreamBuffer, and handles lifecycle events.
 
 import type { Subprocess } from "bun";
-import { captureExePath } from "@/common";
-import { StreamBuffer } from "@/buffer";
-import { ProtocolParser } from "@/protocol";
-import { frameBufferCapacity } from "@/common";
+
+import { StreamBuffer } from "./buffer";
+import { captureExePath, frameBufferCapacity } from "./common";
+import { ProtocolParser } from "./protocol";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

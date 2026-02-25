@@ -1,4 +1,5 @@
 import { DEBUG } from '../debug';
+import { fetchInit } from './api';
 
 export interface NALUnitData {
     type: number;
@@ -16,10 +17,12 @@ export interface StreamFrameData {
  */
 export class H264Decoder {
     private decoder: VideoDecoder | null = null;
+    private streamId: string;
     private onFrame: (frame: VideoFrame) => void;
     private isConfigured = false;
 
-    constructor(onFrame: (frame: VideoFrame) => void) {
+    constructor(streamId: string, onFrame: (frame: VideoFrame) => void) {
+        this.streamId = streamId;
         this.onFrame = onFrame;
     }
 
@@ -28,17 +31,11 @@ export class H264Decoder {
      */
     async init() {
         console.log('H264Decoder: Starting initialization...');
+        console.log('H264Decoder: Fetching codec params for stream %s', this.streamId);
 
-        console.log('H264Decoder: Fetching codec params from http://stream.localhost/init');
-        // Windows WebView2 custom protocol: http://stream.localhost/ maps to stream:// handler
-        const response = await fetch('http://stream.localhost/init');
+        // fetchInit retries on 503 (stream starting up) with exponential backoff.
+        const params = await fetchInit(this.streamId);
 
-        console.log('H264Decoder: Response status:', response.status, response.statusText);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch codec params: ${response.statusText}`);
-        }
-
-        const params = await response.json();
         console.log('H264Decoder: Received params:', {
             sps_base64_length: params.sps.length,
             pps_base64_length: params.pps.length,
