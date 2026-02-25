@@ -1,4 +1,4 @@
-import { DEBUG } from './debug';
+import { DEBUG } from '../debug';
 
 export interface NALUnitData {
     type: number;

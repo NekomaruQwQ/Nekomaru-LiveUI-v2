@@ -1,0 +1,22 @@
+{
+    "$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
+    "linter": {
+        "rules": {
+            "a11y": {
+                "noStaticElementInteractions": "off",
+                "useKeyWithClickEvents": "off"
+            }
+        }
+    },
+    "formatter": {
+        "enabled": false
+    },
+    "assist": {
+        "enabled": false
+    },
+    "css": {
+        "parser": {
+            "tailwindDirectives": true
+        }
+    }
+}

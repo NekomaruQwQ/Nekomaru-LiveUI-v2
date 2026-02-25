@@ -1,0 +1,20 @@
+:root {
+    /* font families (Ubuntu) */
+    --font-sans: 'Ubuntu Light', sans-serif;
+    --font-mono: 'Ubuntu Mono', monospace;
+
+    /* color palette (One Dark) */
+    --color-yellow: #E5C07B;
+    --color-cyan: #56B6C2;
+    --color-blue: #61AFEF;
+    --color-orange: #D19A66;
+    --color-purple: #C678DD;
+    --color-green: #98C379;
+    --color-red: #E06C75;
+
+    /* force dark theme */
+    color-scheme: dark;
+
+    /* base font size */
+    font-size: 14px;
+}

@@ -8,6 +8,7 @@
 //!
 //! ```text
 //! live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200
+//! live-capture.exe --enumerate-windows   # JSON list of capturable windows
 //! ```
 
 mod d3d11;
@@ -23,6 +24,7 @@ use resample::Resampler;
 
 use live_capture::*;
 
+use clap::Parser;
 use nkcore::prelude::*;
 use nkcore::prelude::euclid::Size2D;
 
@@ -42,47 +44,56 @@ const BITRATE: u32 = 8_000_000; // 8 Mbps CBR
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
+/// Standalone screen capture + H.264 encoding to stdout.
+#[derive(Parser)]
+#[command(name = "live-capture")]
 struct CliArgs {
+    /// List visible windows as JSON and exit.
+    #[arg(long)]
+    enumerate_windows: bool,
+
+    /// Window handle (decimal or 0x hex). Required for capture mode.
+    #[arg(long, value_parser = parse_hwnd, required_unless_present = "enumerate_windows")]
+    hwnd: Option<isize>,
+
+    /// Output width (must be a multiple of 16). Required for capture mode.
+    #[arg(long, required_unless_present = "enumerate_windows")]
+    width: Option<u32>,
+
+    /// Output height (must be a multiple of 16). Required for capture mode.
+    #[arg(long, required_unless_present = "enumerate_windows")]
+    height: Option<u32>,
+}
+
+/// Validated arguments for capture mode.
+struct CaptureArgs {
     hwnd: isize,
     width: u32,
     height: u32,
 }
 
-impl CliArgs {
-    fn parse() -> anyhow::Result<Self> {
-        let mut args = std::env::args().skip(1);
-        let mut hwnd: Option<isize> = None;
-        let mut width: Option<u32> = None;
-        let mut height: Option<u32> = None;
+/// Parses a window handle from decimal (`12345`) or hex (`0x1A2B3C`).
+fn parse_hwnd(s: &str) -> Result<isize, String> {
+    let value = if let Some(hex) = s.strip_prefix("0x") {
+        isize::from_str_radix(hex, 16)
+    } else {
+        s.parse()
+    };
+    let value = value.map_err(|e| format!("invalid HWND '{s}': {e}"))?;
+    if value == 0 {
+        Err("HWND must be non-zero".into())
+    } else {
+        Ok(value)
+    }
+}
 
-        while let Some(key) = args.next() {
-            let value = args.next()
-                .ok_or_else(|| anyhow::anyhow!("missing value for {key}"))?;
-
-            match key.as_str() {
-                "--hwnd" => {
-                    hwnd = Some(if let Some(hex) = value.strip_prefix("0x") {
-                        isize::from_str_radix(hex, 16)?
-                    } else {
-                        value.parse()?
-                    });
-                },
-                "--width" => width = Some(value.parse()?),
-                "--height" => height = Some(value.parse()?),
-                other => anyhow::bail!("unknown argument: {other}"),
-            }
-        }
-
-        let hwnd = hwnd.ok_or_else(|| anyhow::anyhow!("missing --hwnd"))?;
-        let width = width.ok_or_else(|| anyhow::anyhow!("missing --width"))?;
-        let height = height.ok_or_else(|| anyhow::anyhow!("missing --height"))?;
-
+impl CaptureArgs {
+    fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            width.is_multiple_of(16) && height.is_multiple_of(16),
-            "width and height must be multiples of 16 (got {width}x{height})");
-        anyhow::ensure!(hwnd != 0, "--hwnd must be non-zero");
-
-        Ok(Self { hwnd, width, height })
+            self.width.is_multiple_of(16) && self.height.is_multiple_of(16),
+            "width and height must be multiples of 16 (got {}x{})",
+            self.width, self.height);
+        Ok(())
     }
 }
 
@@ -91,22 +102,34 @@ impl CliArgs {
 fn main() {
     pretty_env_logger::init();
 
-    let args = match CliArgs::parse() {
-        Ok(args) => args,
-        Err(e) => {
-            eprintln!("error: {e}");
-            eprintln!("usage: live-capture --hwnd 0x1A2B3C --width 1920 --height 1200");
-            std::process::exit(1);
-        }
+    let args = CliArgs::parse();
+
+    if args.enumerate_windows {
+        let windows = enumerate_windows::enumerate_windows();
+        // Stdout is JSON here (not binary IPC), so the server can parse it directly.
+        println!("{}", serde_json::to_string(&windows).expect("JSON serialization failed"));
+        return;
+    }
+
+    // Safe to unwrap: clap enforces these are present when --enumerate-windows is absent.
+    let capture_args = CaptureArgs {
+        hwnd: args.hwnd.unwrap(),
+        width: args.width.unwrap(),
+        height: args.height.unwrap(),
     };
 
-    if let Err(e) = run(args) {
+    if let Err(e) = capture_args.validate() {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
+    if let Err(e) = run(capture_args) {
         eprintln!("fatal: {e:?}");
         std::process::exit(1);
     }
 }
 
-fn run(args: CliArgs) -> anyhow::Result<()> {
+fn run(args: CaptureArgs) -> anyhow::Result<()> {
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .context("CoInitializeEx failed")?;

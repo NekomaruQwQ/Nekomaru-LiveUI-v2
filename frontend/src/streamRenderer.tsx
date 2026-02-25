@@ -1,7 +1,7 @@
 import { useRef, useEffect } from 'preact/hooks';
 import { css } from '@emotion/css';
 
-import { DEBUG } from './debug';
+import { DEBUG } from '../debug';
 import { H264Decoder, parseStreamFrame } from './streamDecoder';
 
 /**

@@ -15,9 +15,12 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+clap = { workspace = true }
+enumerate-windows = { workspace = true }
 ngd3dcompile = { workspace = true }
 nkcore = { workspace = true }
 pretty-name = { workspace = true }
+serde_json = { workspace = true }
 widestring = { workspace = true }
 windows = { workspace = true }
 winrt-capture = { workspace = true }
