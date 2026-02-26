@@ -43,8 +43,8 @@ curl -X POST http://localhost:3000/streams \
 # (Optional) Launch the native control panel (egui)
 cargo run -p live-control
 
-# (Optional) Launch the webview host with locked aspect ratio
-cargo run -p live-app
+# (Optional) Launch the webview host (reads LIVE_PORT env for server URL)
+LIVE_PORT=3000 cargo run -p live-app
 ```
 
 ---
@@ -332,7 +332,7 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **live-app** | `core/live-app/src/main.rs` | Done | Non-resizable 1920x1200 wry webview via nkcore/winit event loop. Opens devtools in debug builds. Loads `http://localhost:3000`. |
+| **live-app** | `core/live-app/src/main.rs` | Done | Non-resizable 1280x800 wry webview via nkcore/winit event loop. CLI args: `--url`, `--window-title`, `--scaling-factor`. Reads `LIVE_PORT` env for default URL. |
 
 ### Completed (LiveServer — `server/`)
 
@@ -355,7 +355,7 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | **YouTube Music Hook** | `frontend/src/youtube-music.ts` | Done | `useYouTubeMusicStream()` hook. Auto-discovers YouTube Music window by title prefix, creates a crop-mode stream (full width × 128px, bottom-aligned playback bar). Polls every 5s for window appear/disappear. Independent of main capture lifecycle. |
 | **App** | `frontend/src/app.tsx` | Done | Pure UI shell. JetBrains Islands dark theme (Tailwind utilities). Top row: main capture + controls. Bottom island: YouTube Music playback bar (auto-detected). |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
-| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc`, `root: "."`, `@` and `@shadcn` aliases. |
+| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` and `@shadcn` aliases. |
 
 ---
 
@@ -454,16 +454,6 @@ Within `live-capture.exe`, the capture thread (main) and encoding thread share a
 
 **Lesson**: D3D11 draw calls require explicit viewport, scissor, and render target setup.
 
-### Bug #4: GPU Synchronization
-
-**Problem**: Encoder reading stale/empty frames from staging texture.
-
-**Fix**: Call `Flush()` after GPU operations + small sleep:
-- UI thread after resample: `Flush()` + `sleep(5ms)`
-- Encoding thread after NV12 conversion: `Flush()`
-
-**Alternative** (not yet implemented): D3D11 queries/fences for proper synchronization.
-
 ---
 
 ## File Structure
@@ -476,7 +466,7 @@ Nekomaru-LiveUI-v2/
 │   ├── live-app/                    # live-app.exe — webview host (Rust, wry + nkcore/winit)
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       └── main.rs              # Non-resizable 1920x1200 window, loads localhost:3000
+│   │       └── main.rs              # Non-resizable 1280x800 wry webview, CLI args for URL/title/scaling
 │   │
 │   ├── live-capture/                # live-capture.exe + live_capture lib (Rust)
 │   │   ├── Cargo.toml               # Emits both [[bin]] and [lib]
@@ -500,6 +490,12 @@ Nekomaru-LiveUI-v2/
 │           ├── app.rs               # ControlApp: egui UI (auto-selector, streams, new capture)
 │           ├── client.rs            # Blocking reqwest wrapper (1s timeout, one method per endpoint)
 │           └── model.rs             # Serde types mirroring server JSON responses
+│
+├── crates/
+│   └── enumerate-windows/           # Window enumeration helper crate
+│       ├── Cargo.toml
+│       └── src/
+│           └── lib.rs               # enumerate_windows() + get_foreground_window()
 │
 ├── server/                          # LiveServer — HTTP server (TypeScript, Hono on Bun)
 │   ├── package.json
@@ -537,81 +533,6 @@ Nekomaru-LiveUI-v2/
 
 ---
 
-## Testing Checklist
-
-### Encoding Pipeline (Complete)
-
-- [x] Encoder initializes successfully
-- [x] Low-latency settings applied (Baseline, CBR, GOP=120)
-- [x] SPS/PPS generated on first frame (~27B + 8B)
-- [x] IDR frame reasonable size (~67 KB for 1920x1200)
-- [x] P-frames vary with screen content (1.5-30 KB)
-- [x] Viewport set before resample (no more 12-byte P-frames)
-- [x] GPU synchronization working (Flush + sleep)
-
-### Frontend Decoder (Complete)
-
-- [x] WebCodecs `VideoDecoder` initializes with avcC descriptor
-- [x] Codec string dynamically built from SPS
-- [x] Annex B → AVCC conversion
-- [x] Decodes IDR and P-frames successfully
-- [x] No memory leaks (`frame.close()` called after render)
-
-### Architecture Refactoring (Implementation Complete — Needs E2E Testing)
-
-- [x] `live-capture.exe` runs standalone and writes binary frames to stdout
-- [x] IPC wire protocol round-trip tested (Rust serialization + deserialization)
-- [x] Stdout wire protocol parses correctly in TypeScript (`server/protocol.ts`)
-- [x] LiveServer spawns and manages `live-capture.exe` instances (`server/process.ts`)
-- [x] HTTP API serves codec params and frame data (`server/api.ts`)
-- [x] Server API type-exported for Hono RPC (`ApiType`)
-- [x] Multiple browsers can connect to the same stream (circular buffer, no drain)
-- [x] `live-app.exe` opens webview to localhost with locked aspect ratio
-- [x] Frontend uses typed Hono RPC client (`hc<ApiType>`)
-- [x] Frontend points at real HTTP API (`/streams/:id/init`, `/streams/:id/frames`)
-- [x] Frontend creates/selects/stops captures via API (no hardcoded stream ID)
-- [x] Decoder retries on 503 (stream starting up) with exponential backoff
-- [x] Migrated from Preact to React 19
-- [x] UI redesigned: JetBrains Islands dark theme, Emotion CSS replaced with Tailwind utilities, shadcn removed
-- [x] Auto window selector integrated (server-side `selector.ts`, one-shot `--foreground-window` CLI)
-- [x] Frontend starts in auto-select mode by default, polls `/streams/auto` for stream ID changes
-- [x] Manual fallback mode (window picker) available when auto-select is stopped
-- [ ] Frontend works in both webview and regular browser
-
-### YouTube Music Island (Pending)
-
-- [ ] Bottom island auto-detects YouTube Music window by title prefix
-- [ ] Crop-mode stream created (full width × 128px, bottom-aligned)
-- [ ] Playback bar renders in the bottom island via `<StreamRenderer>`
-- [ ] Island shows placeholder when YouTube Music is not running
-- [ ] Closing YouTube Music tears down the stream within 5s
-- [ ] Re-opening YouTube Music auto-creates a new stream within 5s
-- [ ] YouTube Music stream lifecycle independent of main capture stream
-
-### Crop Mode (Pending)
-
-- [ ] Crop mode produces valid H.264 output (center-aligned fixed dimensions)
-- [ ] `full` dimension resolves correctly from source window size
-- [ ] Alignment variants position the crop box correctly (center, top-left, bottom-right, etc.)
-- [ ] Source window resize: crop clamps gracefully (no crash, partial view)
-- [ ] CLI rejects mixing `--width`/`--height` with `--crop-*`
-- [ ] CLI rejects non-multiple-of-16 crop dimensions
-
-### End-to-End (Pending)
-
-- [ ] Video displays in browser
-- [ ] Video content matches captured window
-- [ ] Latency < 100ms
-- [ ] 60fps playback (smooth, no stuttering)
-- [ ] No frame drops under normal load
-- [ ] Handles long runs (10+ minutes) without memory leak
-- [ ] CPU usage reasonable (NVENC should be low CPU)
-- [ ] Auto-selector switches capture when foreground window changes
-- [ ] Auto-selector skips windows not in include list
-- [ ] Frontend tracks stream ID changes during auto-select switches
-
----
-
 ## Known Issues
 
 ### 1. Hardcoded NVIDIA Encoder
@@ -619,96 +540,10 @@ Nekomaru-LiveUI-v2/
 Only selects encoders with "nvidia" in name. Fails on Intel/AMD.
 **Priority**: Low (personal use, RTX 5090).
 
-### 2. ~~Hardcoded Resolution~~ (Fixed)
-
-Resolution is now configurable via `--width` and `--height` CLI args in `live-capture.exe`. The monolith (`src/`) still hardcodes 1920x1200.
-
-### 3. No Error Recovery
+### 2. No Error Recovery
 
 Encoding errors cause panic (`.unwrap()` / `.expect()`).
 **Priority**: Medium. Should skip frames and log to stderr instead.
-
----
-
-## Dependencies
-
-### live-capture (Rust)
-
-```toml
-[dependencies]
-nkcore = { features = ["debug"] }   # Common utilities, macros, euclid re-export
-ngd3dcompile = { ... }              # Compile-time HLSL shader compilation
-winrt-capture = { ... }             # Windows Graphics Capture wrapper
-log = "0.4"
-pretty_env_logger = "0.5"
-pretty-name = "0.4"
-widestring = "1.2"
-windows = { version = "0.62", features = [
-    "Graphics_Capture",
-    "Graphics_DirectX_Direct3D11",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Media_MediaFoundation",
-    "Win32_System_Com",
-    # ...
-]}
-```
-
-### live-control (Rust)
-
-```toml
-[dependencies]
-eframe = { version = "0.33", features = ["default_fonts", "glow"] }  # egui framework + OpenGL backend
-reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }  # Blocking HTTP client
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-```
-
-### live-app (Rust)
-
-```toml
-[dependencies]
-nkcore = { features = ["winit"] }  # Event loop integration (run_app_with)
-winit = { version = "0.30", features = ["rwh_06"] }
-wry = "0.54"
-```
-
-### LiveServer (TypeScript)
-
-```json
-{
-    "dependencies": {
-        "hono": "^4.x",
-        "@hono/node-server": "^1.x",
-        "@hono/zod-validator": "^0.7.x",
-        "zod": "^4.x",
-        "immer": "^11.x",
-        "ts-pattern": "^5.x",
-        "remeda": "^2.x"
-    },
-    "devDependencies": {
-        "vite": "^7.x"
-    }
-}
-```
-
-### Frontend (TypeScript)
-
-```json
-{
-    "dependencies": {
-        "react": "^19.x",
-        "react-dom": "^19.x",
-        "@emotion/css": "^11.x (installed, no longer used in UI — migrated to Tailwind)",
-        "tailwindcss": "^4.x",
-        "hono": "^4.x (hono/client for RPC)",
-        "zod": "^4.x",
-        "immer": "^11.x",
-        "lucide-react": "^0.563",
-        "@fortawesome/react-fontawesome": "^3.x",
-        "@radix-ui/react-*": "installed (shadcn removed, primitives kept for future use)"
-    }
-}
-```
 
 ---
 

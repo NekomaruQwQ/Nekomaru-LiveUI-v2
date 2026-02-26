@@ -1,5 +1,5 @@
 // Hook that auto-discovers a YouTube Music window and streams its playback
-// bar (bottom 144px) via crop-mode capture.
+// bar (bottom 128px) via crop-mode capture.
 //
 // Completely independent from useCaptureControl() — the two hooks manage
 // separate streams with separate lifecycles.
@@ -21,7 +21,7 @@ const POLL_INTERVAL_MS = 5000;
 /// Manages a crop-mode stream of the YouTube Music playback bar.
 ///
 /// On mount, enumerates windows and looks for one whose title starts with
-/// "YouTube Music".  If found, creates a crop stream (full width × 144px,
+/// "YouTube Music".  If found, creates a crop stream (full width × 128px,
 /// bottom-aligned).  Polls every 5s to detect the window appearing or
 /// disappearing, creating/destroying the stream accordingly.
 ///
@@ -46,7 +46,7 @@ export function useYouTubeMusicStream() {
 
                 if (ytm && !activeStreamId) {
                     // YouTube Music appeared — create a crop stream for the
-                    // playback bar (bottom 144px at full window width).
+                    // playback bar (bottom 128px at full window width).
                     const createRes = await api.index.$post({
                         json: {
                             hwnd: String(ytm.hwnd),
