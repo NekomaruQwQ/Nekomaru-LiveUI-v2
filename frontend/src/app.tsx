@@ -8,7 +8,7 @@ import { cn } from '@shadcn/lib/utils';
 
 /// Shared island panel style — dark surface, subtle border, soft shadow.
 const island = cn(
-    "border border-[#393b40] rounded-xl",
+    "border border-[#393b40] rounded-lg",
     "shadow-[0_1px_3px_rgba(0,0,0,0.3),0_4px_12px_rgba(0,0,0,0.15)]",
     "bg-[#2b2d30]");
 
@@ -30,10 +30,18 @@ export function App() {
         <div className="flex flex-col flex-1 gap-2 p-2">
             <div className="flex flex-row flex-1 gap-2">
                 <div className={"flex flex-col flex-3 gap-2"}>
+                    {/* Top Row: Marquee Banner */}
                     <div className={cn(island, "flex flex-col flex-1 overflow-hidden")}>
                     </div>
-                    <div className={cn(island, "h-120 overflow-hidden")}>
+                    {/* Top Row 2: Unused */}
+                    <div className={cn("flex flex-col flex-1 overflow-hidden")}>
+                    </div>
+                    {/* Main Content */}
+                    <div className={cn(island, "aspect-16-10 p-0.5 overflow-hidden")}>
                         <MainCaptureContent capture={capture} />
+                    </div>
+                    {/* Bottom Row: Unused */}
+                    <div className={cn(island, "flex flex-col flex-1 overflow-hidden")}>
                     </div>
                 </div>
                 <div className={cn(island, "flex-1 p-6 flex flex-col gap-3")}>
@@ -49,7 +57,7 @@ export function App() {
                     )}
                 </div>
             </div>
-            <div className={cn(island, "h-13 overflow-hidden")}>
+            <div className={cn(island, "h-16 overflow-hidden")}>
                 {ytMusic.streamId ? (
                     <StreamRenderer streamId={ytMusic.streamId} />
                 ) : (
@@ -66,7 +74,9 @@ function MainCaptureContent({ capture }: { capture: ReturnType<typeof useCapture
     return capture.loading ? (
         <Placeholder>Connecting...</Placeholder>
     ) : capture.streamId ? (
-        <StreamRenderer streamId={capture.streamId} />
+        <div className="w-full rounded-md overflow-clip">
+            <StreamRenderer streamId={capture.streamId} />
+        </div>
     ) : capture.autoActive ? (
         <Placeholder>Auto-selecting...</Placeholder>
     ) : capture.windows ? (

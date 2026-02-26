@@ -47,6 +47,12 @@ struct LiveAppArgs {
     /// Window title. Defaults to the URL if not provided.
     #[arg(long, short = 'm')]
     pub window_title: Option<String>,
+
+    /// Device scaling factor to use for the webview. If not provided, the
+    /// webview will use the system scaling factor, which may cause issues
+    /// on high-DPI displays.
+    #[arg(long, short = 's')]
+    pub scaling_factor: Option<String>,
 }
 
 /// Parse CLI arguments and launch the webview. Convenience entry point for
@@ -60,23 +66,23 @@ fn main() {
     let url =
         args.url
             .unwrap_or_else(get_server_url);
-    run_webview(title, &url);
+    run_webview(title, &url, args.scaling_factor);
 }
 
-pub fn run_webview(title: &str, url: &str) {
+pub fn run_webview(title: &str, url: &str, scaling_factor: Option<String>) {
     // SAFETY: Single-threaded access to environment variable, set before
     // any threads are spawned.
     unsafe {
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", [
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", format!(
+            "{} {} {}",
             // Force WebView2 to use a device scale factor of 1 to get consistent behavior
             // across different DPI settings.
-            "--force-device-scale-factor=2",
+            scaling_factor.map_or_else(String::new, |s| format!("--force-device-scale-factor={s}")),
             // Disable WebView2's background throttling features to prevent the webview
             // from freezing when the window is not in the foreground. This is necessary
             // for streaming.
             "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-        ].join(" "));
+            "--disable-renderer-backgrounding"));
     }
 
     pretty_env_logger::init();

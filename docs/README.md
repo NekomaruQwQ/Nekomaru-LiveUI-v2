@@ -2,7 +2,7 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | YouTube Music Island Added | End-to-End Testing Next
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | YouTube Music Island Added | Control Panel Added (egui) | End-to-End Testing Next
 **Last Updated**: 2026-02-26
 **Hardware**: RTX 5090 | Windows 11
 
@@ -40,6 +40,9 @@ curl -X POST http://localhost:3000/streams \
 # Open the frontend in any browser
 # http://localhost:3000
 
+# (Optional) Launch the native control panel (egui)
+cargo run -p live-control
+
 # (Optional) Launch the webview host with locked aspect ratio
 cargo run -p live-app
 ```
@@ -50,7 +53,7 @@ cargo run -p live-app
 
 ### Multi-Executable Design
 
-The project is split into three independently running components. The hard work (GPU capture + hardware encoding) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
+The project is split into four independently running components. The hard work (GPU capture + hardware encoding) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -120,6 +123,7 @@ The project is split into three independently running components. The hard work 
 |---------|----------|-----------|
 | GPU capture + encoding | Rust (`live-capture`) | Requires `unsafe` Windows APIs, hardware access, zero-copy GPU pipelines. No alternative. |
 | HTTP server + stream management | TypeScript (Hono on Bun) | Pure I/O multiplexing — shuttles bytes from child processes to HTTP clients. Dev velocity (hot reload) matters far more than soundness here. |
+| Control panel | Rust (`live-control`, optional) | Native egui/eframe GUI for managing captures. Talks to LiveServer via blocking HTTP. |
 | Webview host | Rust (`live-app`, optional) | Tiny wry wrapper for aspect-ratio-locked window. Could also just use a browser. |
 | IPC | Child process stdout | Zero config, natural lifetime (process death = stream death), trivially testable (`live-capture > dump.bin`). |
 
@@ -315,6 +319,15 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 | **Decoder** | `frontend/src/stream/decoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor. `fetchInit()` with 503 retry/backoff. |
 | **Renderer** | `frontend/src/stream/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. |
 
+### Completed (Control Panel — `core/live-control/`)
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| **Entry Point** | `core/live-control/src/main.rs` | Done | `eframe::run_native`, reads `LIVE_PORT` env var (default 3000). |
+| **App** | `core/live-control/src/app.rs` | Done | `ControlApp` (eframe::App). Three sections: auto-selector, active streams, new capture. Polls server every 2s. Shows disconnected state when server is unreachable. |
+| **HTTP Client** | `core/live-control/src/client.rs` | Done | Blocking reqwest wrapper. One method per API endpoint. 1s timeout to avoid UI hangs. |
+| **Data Types** | `core/live-control/src/model.rs` | Done | `StreamInfo`, `WindowInfo`, `AutoStatus`, `CreateStreamResponse` — mirrors server JSON responses. |
+
 ### Completed (Webview Host)
 
 | Component | File | Status | Notes |
@@ -483,7 +496,10 @@ Nekomaru-LiveUI-v2/
 │   └── live-control/                # live-control.exe — control panel (Rust, eframe/egui)
 │       ├── Cargo.toml
 │       └── src/
-│           └── main.rs
+│           ├── main.rs              # Entry point, reads LIVE_PORT env, launches eframe window
+│           ├── app.rs               # ControlApp: egui UI (auto-selector, streams, new capture)
+│           ├── client.rs            # Blocking reqwest wrapper (1s timeout, one method per endpoint)
+│           └── model.rs             # Serde types mirroring server JSON responses
 │
 ├── server/                          # LiveServer — HTTP server (TypeScript, Hono on Bun)
 │   ├── package.json
@@ -635,6 +651,16 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     # ...
 ]}
+```
+
+### live-control (Rust)
+
+```toml
+[dependencies]
+eframe = { version = "0.33", features = ["default_fonts", "glow"] }  # egui framework + OpenGL backend
+reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"] }  # Blocking HTTP client
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 ```
 
 ### live-app (Rust)
