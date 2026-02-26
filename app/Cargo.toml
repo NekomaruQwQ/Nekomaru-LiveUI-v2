@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+clap = { workspace = true }
 nkcore = { workspace = true, features = ["winit"] }
 winit = { workspace = true }
 wry = { workspace = true }
