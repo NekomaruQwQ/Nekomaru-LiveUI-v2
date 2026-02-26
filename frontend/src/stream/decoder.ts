@@ -22,13 +22,17 @@ interface InitParams {
     height: number;
 }
 
-/// Fetch codec initialization params, retrying on 503 (stream starting up).
+/// Fetch codec initialization params, retrying on 503 and 404.
 ///
-/// The server returns 503 while the capture process is initializing (the
-/// encoder hasn't produced its first IDR frame yet).  This wrapper retries
-/// with exponential backoff up to ~5 seconds before giving up.
+/// 503: the capture process is initializing (encoder hasn't produced its
+///      first IDR frame yet).
+/// 404: the stream doesn't exist yet — the server may create it shortly
+///      (e.g. the auto-selector hasn't picked a window yet).
+///
+/// Retries with exponential backoff (capped at 2s) for up to 30 attempts,
+/// giving the server plenty of time to create and initialize the stream.
 async function fetchInit(streamId: string): Promise<InitParams> {
-    const maxRetries = 20;
+    const maxRetries = 30;
     const baseDelayMs = 250;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -40,7 +44,8 @@ async function fetchInit(streamId: string): Promise<InitParams> {
             return await res.json() as InitParams;
         }
 
-        if (res.status === 503) {
+        // Retriable: stream not yet created (404) or encoder still starting (503).
+        if (res.status === 404 || res.status === 503) {
             const delay = baseDelayMs * Math.min(2 ** attempt, 8);
             await new Promise((r) => setTimeout(r, delay));
             continue;

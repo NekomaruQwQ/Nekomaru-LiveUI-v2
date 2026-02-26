@@ -35,6 +35,7 @@ const api = new Hono()
             id: s.id,
             hwnd: s.hwnd,
             status: s.status,
+            generation: s.generation,
         })));
     })
 
@@ -140,6 +141,7 @@ const api = new Hono()
             const frames = stream.buffer.getFramesAfter(after);
 
             return c.json({
+                generation: stream.generation,
                 frames: frames.map((f) => ({
                     sequence: f.sequence,
                     data: uint8ToBase64(f.payload),

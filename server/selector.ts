@@ -3,10 +3,9 @@
 // Polls the foreground window every 2 seconds via a one-shot
 // `live-capture.exe --foreground-window` spawn.  When the foreground window
 // matches the include list (and doesn't match the exclude list), and differs
-// from the current capture target, the selector destroys the old stream and
-// creates a new one automatically.
-//
-// This mirrors the original Rust `LiveCaptureWindowSelector` from the monolith.
+// from the current capture target, the selector replaces the "main" stream
+// in-place (bumping its generation counter) instead of destroying and
+// recreating it.
 
 import { captureExePath } from "./common";
 import * as proc from "./process";
@@ -36,6 +35,9 @@ const POLL_INTERVAL_MS = 2000;
 /// Default capture resolution when auto-selecting a window.
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1200;
+
+/// Well-known stream ID managed by the selector.
+const STREAM_ID = "main";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,9 +69,6 @@ class LiveWindowSelector {
     /// windows to decide whether to switch.
     private lastCaptureHwnd: string | null = null;
 
-    /// The stream ID managed by this selector (so we can destroy it on switch).
-    currentStreamId: string | null = null;
-
     get active(): boolean {
         return this.timer !== null;
     }
@@ -86,11 +85,8 @@ class LiveWindowSelector {
         this.timer = null;
 
         // Kill the stream we were managing.
-        if (this.currentStreamId) {
-            proc.destroyStream(this.currentStreamId);
-            console.log(`[selector] destroyed stream ${this.currentStreamId}`);
-            this.currentStreamId = null;
-        }
+        proc.destroyStream(STREAM_ID);
+        console.log(`[selector] destroyed stream ${STREAM_ID}`);
 
         this.lastForegroundHwnd = null;
         this.lastCaptureHwnd = null;
@@ -100,7 +96,7 @@ class LiveWindowSelector {
     status(): SelectorStatus {
         return {
             active: this.active,
-            currentStreamId: this.currentStreamId,
+            currentStreamId: this.active ? STREAM_ID : null,
             currentHwnd: this.lastCaptureHwnd,
         };
     }
@@ -126,15 +122,11 @@ class LiveWindowSelector {
         if (hwndStr === this.lastCaptureHwnd) return;
 
         // ── Switch capture ───────────────────────────────────────────────
-        if (this.currentStreamId) {
-            proc.destroyStream(this.currentStreamId);
-            console.log(`[selector] destroyed stream ${this.currentStreamId}`);
-        }
-
-        const stream = proc.createStream(hwndStr, DEFAULT_WIDTH, DEFAULT_HEIGHT);
-        this.currentStreamId = stream.id;
+        // replaceStream is idempotent — creates the "main" stream if it
+        // doesn't exist, or kills the old process + bumps generation.
+        proc.replaceStream(STREAM_ID, hwndStr, DEFAULT_WIDTH, DEFAULT_HEIGHT);
         this.lastCaptureHwnd = hwndStr;
-        console.log(`[selector] capturing ${hwndStr} → stream ${stream.id}`);
+        console.log(`[selector] capturing ${hwndStr} → stream ${STREAM_ID}`);
     }
 }
 

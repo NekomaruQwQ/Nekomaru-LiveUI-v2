@@ -17,6 +17,11 @@ export interface CaptureStream {
     hwnd: string;
     status: "starting" | "running" | "stopped";
     buffer: StreamBuffer;
+    /// Monotonically increasing counter — bumped each time the underlying
+    /// capture process is replaced (via replaceStream / replaceCropStream).
+    /// The frontend uses this to detect stream replacement and reinitialize
+    /// its decoder.
+    generation: number;
     /// Bun child process handle.  Null after the process has exited and been
     /// cleaned up by destroyStream().
     process: Subprocess | null;
@@ -53,25 +58,15 @@ export async function enumerateWindows(): Promise<unknown[]> {
 
 // ── Create / destroy streams ─────────────────────────────────────────────────
 
-/// Spawn a live-capture.exe child process with the given CLI args, wire up
-/// stdout parsing and stderr forwarding, and register the stream.
+/// Spawn a live-capture.exe child process and wire its stdout/stderr to the
+/// given `CaptureStream`.  The stream must already be registered in the Map.
 ///
-/// Returns immediately; status transitions to "running" once the first
-/// CodecParams message arrives from the encoder.
-function spawnCapture(hwnd: string, args: string[], label: string): CaptureStream {
-    const id = crypto.randomUUID().slice(0, 8);
-    const buffer = new StreamBuffer(frameBufferCapacity);
-
+/// Factored out of `spawnCapture` so both the create and replace paths can
+/// share the same wiring logic without duplication.
+function spawnAndWire(stream: CaptureStream, args: string[], label: string): void {
+    const { id } = stream;
     const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-
-    const stream: CaptureStream = {
-        id, hwnd,
-        status: "starting",
-        buffer,
-        process: proc,
-    };
-
-    streams.set(id, stream);
+    stream.process = proc;
 
     // Wire stdout → ProtocolParser → StreamBuffer
     const parser = new ProtocolParser((msg) => {
@@ -101,12 +96,31 @@ function spawnCapture(hwnd: string, args: string[], label: string): CaptureStrea
     });
 
     console.log(`[stream:${id}] spawned (${label})`);
+}
+
+/// Create a brand-new stream with a random ID and register it.
+/// Used by the manual create endpoints (live-control) and as the internal
+/// fallback when replaceStream / replaceCropStream targets a non-existent ID.
+function spawnCapture(id: string, hwnd: string, args: string[], label: string): CaptureStream {
+    const buffer = new StreamBuffer(frameBufferCapacity);
+
+    const stream: CaptureStream = {
+        id, hwnd,
+        status: "starting",
+        buffer,
+        generation: 1,
+        process: null,
+    };
+
+    streams.set(id, stream);
+    spawnAndWire(stream, args, label);
     return stream;
 }
 
 /// Spawn a resample-mode capture: scales the full window to `width x height`.
 export function createStream(hwnd: string, width: number, height: number): CaptureStream {
-    return spawnCapture(hwnd,
+    const id = crypto.randomUUID().slice(0, 8);
+    return spawnCapture(id, hwnd,
         [captureExePath, "--hwnd", hwnd, "--width", String(width), "--height", String(height)],
         `hwnd=${hwnd}, resample ${width}x${height}`);
 }
@@ -121,12 +135,73 @@ export function createCropStream(
     cropWidth: "full" | number,
     cropHeight: "full" | number,
     cropAlign: string): CaptureStream {
-    return spawnCapture(hwnd,
+    const id = crypto.randomUUID().slice(0, 8);
+    return spawnCapture(id, hwnd,
         [captureExePath, "--hwnd", hwnd,
             "--crop-width", String(cropWidth),
             "--crop-height", String(cropHeight),
             "--crop-align", cropAlign],
         `hwnd=${hwnd}, crop ${cropWidth}x${cropHeight} ${cropAlign}`);
+}
+
+/// Replace the capture process behind a well-known stream ID.
+///
+/// If a stream with `id` already exists, the old process is killed, the
+/// buffer is reset, and the generation counter is bumped — the Map entry is
+/// never removed, so `getStream(id)` never returns `undefined` during the
+/// transition.  If no stream with `id` exists, one is created (idempotent).
+export function replaceStream(id: string, hwnd: string, width: number, height: number): CaptureStream {
+    const args = [captureExePath, "--hwnd", hwnd, "--width", String(width), "--height", String(height)];
+    const label = `hwnd=${hwnd}, resample ${width}x${height}`;
+
+    const existing = streams.get(id);
+    if (!existing) return spawnCapture(id, hwnd, args, label);
+
+    // Kill old process, reset buffer, bump generation.
+    if (existing.process) {
+        existing.process.kill();
+        existing.process = null;
+    }
+    existing.hwnd = hwnd;
+    existing.status = "starting";
+    existing.buffer.reset();
+    existing.generation++;
+
+    spawnAndWire(existing, args, label);
+    console.log(`[stream:${id}] replaced (gen ${existing.generation})`);
+    return existing;
+}
+
+/// Replace a crop-mode stream behind a well-known stream ID.
+/// Same semantics as `replaceStream` but for crop mode.
+export function replaceCropStream(
+    id: string,
+    hwnd: string,
+    cropWidth: "full" | number,
+    cropHeight: "full" | number,
+    cropAlign: string): CaptureStream {
+    const args = [
+        captureExePath, "--hwnd", hwnd,
+        "--crop-width", String(cropWidth),
+        "--crop-height", String(cropHeight),
+        "--crop-align", cropAlign];
+    const label = `hwnd=${hwnd}, crop ${cropWidth}x${cropHeight} ${cropAlign}`;
+
+    const existing = streams.get(id);
+    if (!existing) return spawnCapture(id, hwnd, args, label);
+
+    if (existing.process) {
+        existing.process.kill();
+        existing.process = null;
+    }
+    existing.hwnd = hwnd;
+    existing.status = "starting";
+    existing.buffer.reset();
+    existing.generation++;
+
+    spawnAndWire(existing, args, label);
+    console.log(`[stream:${id}] replaced (gen ${existing.generation})`);
+    return existing;
 }
 
 /// Kill the child process and remove the stream from the registry.

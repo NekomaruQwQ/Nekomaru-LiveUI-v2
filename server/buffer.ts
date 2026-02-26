@@ -58,6 +58,17 @@ export class StreamBuffer {
         return this.codecParams;
     }
 
+    /// Clear all buffered state — frames, codec params, and sequence counter.
+    /// Used by replaceStream() when the underlying capture process is swapped
+    /// so stale frames from the old process are never served.
+    reset(): void {
+        this.frames.fill(undefined);
+        this.writeIndex = 0;
+        this.count = 0;
+        this.nextSequence = 1;
+        this.codecParams = null;
+    }
+
     /// Push a parsed frame into the circular buffer.
     ///
     /// Assigns the next sequence number and pre-serializes the frame payload

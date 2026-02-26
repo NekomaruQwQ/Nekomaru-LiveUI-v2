@@ -21,6 +21,7 @@ import * as hono from "@hono/node-server";
 import { serverPort, baseUrl } from "./common";
 import { destroyAll } from "./process";
 import { selector } from "./selector";
+import { ytmManager } from "./youtube-music";
 import api from "./api";
 
 // ── Hono app ─────────────────────────────────────────────────────────────────
@@ -55,19 +56,27 @@ const httpServer =
 
 httpServer.listen(serverPort, () => {
     console.log(`LiveServer running at ${baseUrl}`);
+
+    // Auto-start the window selector and YouTube Music manager once the
+    // HTTP server is listening, so streams are created before any client
+    // connects.
+    selector.start();
+    ytmManager.start();
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
-// Stop the auto-selector and kill all child processes when the server shuts down.
+// Stop both managers and kill all child processes when the server shuts down.
 
 process.on("SIGINT", () => {
     selector.stop();
+    ytmManager.stop();
     destroyAll();
     process.exit(0);
 });
 
 process.on("SIGTERM", () => {
     selector.stop();
+    ytmManager.stop();
     destroyAll();
     process.exit(0);
 });

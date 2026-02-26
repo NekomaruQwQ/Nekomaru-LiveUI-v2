@@ -2,7 +2,7 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | YouTube Music Island Added | Control Panel Added (egui) | End-to-End Testing Next
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | YouTube Music Island Added | Control Panel Added (egui) | Server-Managed Streams with Well-Known IDs | End-to-End Testing Next
 **Last Updated**: 2026-02-26
 **Hardware**: RTX 5090 | Windows 11
 
@@ -29,15 +29,10 @@
 # Build the Rust executables
 cargo build --release
 
-# Start the server (serves frontend + manages captures)
+# Start the server (auto-starts window selector + YouTube Music manager)
 cd server && bun run index.ts
 
-# Create a capture (replace HWND with your target window)
-curl -X POST http://localhost:3000/streams \
-    -H 'Content-Type: application/json' \
-    -d '{"hwnd":"0x1A2B3C", "width":1920, "height":1200}'
-
-# Open the frontend in any browser
+# Open the frontend in any browser — streams start automatically
 # http://localhost:3000
 
 # (Optional) Launch the native control panel (egui)
@@ -45,6 +40,12 @@ cargo run -p live-control
 
 # (Optional) Launch the webview host (reads LIVE_PORT env for server URL)
 LIVE_PORT=3000 cargo run -p live-app
+
+# (Optional) Manual capture via curl (the server manages "main" and
+# "youtube-music" automatically, but you can still create extra streams)
+curl -X POST http://localhost:3000/streams \
+    -H 'Content-Type: application/json' \
+    -d '{"hwnd":"0x1A2B3C", "width":1920, "height":1200}'
 ```
 
 ---
@@ -82,17 +83,25 @@ The project is split into four independently running components. The hard work (
 │  Process Manager                                                 │
 │    - Spawns / kills live-capture.exe instances                   │
 │    - Reads their stdout, parses binary frames                    │
+│    - Well-known stream IDs: "main" + "youtube-music"             │
+│    - Generation counter per stream (bumps on replace)            │
 │                                                                  │
 │  Stream Buffer (per capture)                                     │
 │    - Circular buffer (~60 frames, ~1 second)                     │
 │    - Caches SPS/PPS from IDR frames for new clients              │
 │    - Sequence numbering for polling                              │
+│    - reset() clears state on stream replacement                  │
+│                                                                  │
+│  Auto Selector + YouTube Music Manager                           │
+│    - Auto-starts on server boot                                  │
+│    - Selector: polls foreground, replaces "main" stream          │
+│    - YTM: polls window list, manages "youtube-music" stream      │
 │                                                                  │
 │  HTTP API                                                        │
 │    - /streams             → list / create / delete captures      │
 │    - /streams/auto        → start / stop / status auto-selector  │
 │    - /streams/:id/init    → codec params (SPS, PPS, resolution)  │
-│    - /streams/:id/frames  → encoded frames (polling)             │
+│    - /streams/:id/frames  → encoded frames + generation (poll)   │
 │                                                                  │
 │  Frontend Server                                                 │
 │    - Proxies to Vite dev server (development)                    │
@@ -107,12 +116,12 @@ The project is split into four independently running components. The hard work (
 │  Any browser works. live-app.exe is an optional thin wry         │
 │  webview host that locks the window aspect ratio for streaming.  │
 │                                                                  │
-│  Frontend (React + WebCodecs)                                    │
+│  Frontend (React + WebCodecs) — pure viewer                      │
 │    - Typed API client via Hono RPC (hc)                          │
 │    - H264Decoder (avcC descriptor, Annex B → AVCC conversion)    │
 │    - StreamRenderer (Canvas rendering, ~60fps polling)           │
-│    - Auto-select mode by default (polls selector status)         │
-│    - Manual fallback: window picker, create/stop captures        │
+│    - Generation-aware: reinits decoder on stream replacement     │
+│    - Hardcoded stream IDs: "main" + "youtube-music"              │
 │    - Multiple viewers can connect to the same stream             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -232,7 +241,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 
 ```json
 [
-    { "id": "abc123", "hwnd": "0x1A2B3C", "status": "running" }
+    { "id": "main", "hwnd": "0x1A2B3C", "status": "running", "generation": 3 }
 ]
 ```
 
@@ -270,6 +279,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 
 ```json
 {
+    "generation": 3,
     "frames": [
         { "sequence": 123, "data": "<base64>" },
         { "sequence": 124, "data": "<base64>" }
@@ -277,7 +287,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 }
 ```
 
-The base64 `data` field contains a pre-serialized binary payload (timestamp + NAL units). Keyframe status is inferred from NAL unit types on the frontend.
+The `generation` field increments each time the underlying capture process is replaced (e.g. window switch). The frontend uses this to detect replacements and reinitialize its decoder. The base64 `data` field contains a pre-serialized binary payload (timestamp + NAL units). Keyframe status is inferred from NAL unit types on the frontend.
 
 **`GET /streams/windows`** — List capturable windows (one-shot spawn of `live-capture.exe --enumerate-windows`).
 
@@ -286,12 +296,12 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 **`GET /streams/auto`** — Get auto-selector status.
 
 ```json
-{ "active": true, "currentStreamId": "abc123", "currentHwnd": "0x1A2B3C" }
+{ "active": true, "currentStreamId": "main", "currentHwnd": "0x1A2B3C" }
 ```
 
-**`POST /streams/auto`** — Start the auto-selector (idempotent). Polls the foreground window every 2 seconds and automatically switches captures when the foreground matches the include list.
+**`POST /streams/auto`** — Start the auto-selector (idempotent). Polls the foreground window every 2 seconds and automatically switches captures when the foreground matches the include list. The managed stream always has ID `"main"`.
 
-**`DELETE /streams/auto`** — Stop the auto-selector and destroy its managed stream.
+**`DELETE /streams/auto`** — Stop the auto-selector and destroy the `"main"` stream.
 
 ---
 
@@ -316,8 +326,8 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Decoder** | `frontend/src/stream/decoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor. `fetchInit()` with 503 retry/backoff. |
-| **Renderer** | `frontend/src/stream/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. |
+| **Decoder** | `frontend/src/stream/decoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor. `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). |
+| **Renderer** | `frontend/src/stream/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Owns full decoder lifecycle via `startStreamLoop()`. 404 treated as retriable. |
 
 ### Completed (Control Panel — `core/live-control/`)
 
@@ -338,22 +348,22 @@ The base64 `data` field contains a pre-serialized binary payload (timestamp + NA
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/streams` → API, everything else → Vite. SIGINT/SIGTERM cleanup. |
-| **Stream API** | `server/api.ts` | Done | Hono routes: `GET/POST/DELETE /streams`, `GET/POST/DELETE /streams/auto`, `GET /streams/:id/init`, `GET /streams/:id/frames?after=N`, `GET /streams/windows`. POST accepts resample or crop mode (Zod union). |
-| **Process Manager** | `server/process.ts` | Done | Shared `spawnCapture()` helper + `createStream()` (resample) and `createCropStream()` (crop) wrappers. Wires stdout → ProtocolParser → StreamBuffer. Tracks lifecycle (starting → running → stopped). |
+| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/streams` → API, everything else → Vite. Auto-starts selector and YTM manager on boot. SIGINT/SIGTERM cleanup. |
+| **Stream API** | `server/api.ts` | Done | Hono routes: `GET/POST/DELETE /streams`, `GET/POST/DELETE /streams/auto`, `GET /streams/:id/init`, `GET /streams/:id/frames?after=N`, `GET /streams/windows`. POST accepts resample or crop mode (Zod union). `generation` field in list and frames responses. |
+| **Process Manager** | `server/process.ts` | Done | `CaptureStream` with `generation` counter. `spawnAndWire()` helper shared by create and replace paths. `createStream()`/`createCropStream()` for manual use (random IDs). `replaceStream()`/`replaceCropStream()` for well-known IDs — kills old process, resets buffer, bumps generation in-place (idempotent: creates if missing). |
 | **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
-| **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. |
+| **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. `reset()` clears all state on stream replacement. |
 | **Constants** | `server/common.ts` | Done | Port (`LIVE_PORT` env or 3000), exe path, buffer capacity. |
-| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Include/exclude list matching. Auto-creates/destroys streams on window switch. |
+| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Include/exclude list matching. Uses `replaceStream("main", ...)` — stream ID is always `"main"`, generation bumps on each switch. |
+| **YouTube Music Manager** | `server/youtube-music.ts` | Done | `YouTubeMusicManager` class. Polls `enumerateWindows()` every 5s, finds window by `"YouTube Music"` title prefix. Creates/replaces `"youtube-music"` crop stream (full width × 128px, bottom-aligned). Destroys stream when window disappears. |
 
 ### Completed (Frontend — React + Hono RPC)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
 | **API Client** | `frontend/src/api.ts` | Done | Typed Hono RPC client via `hc<ApiType>("/streams")`. Imports server route type for end-to-end type safety. |
-| **Capture Hook** | `frontend/src/capture.ts` | Done | `useCaptureControl()` hook. Owns all capture state (stream ID, auto-selector, window list). Auto-selector polling, window enumeration, stream create/destroy. |
-| **YouTube Music Hook** | `frontend/src/youtube-music.ts` | Done | `useYouTubeMusicStream()` hook. Auto-discovers YouTube Music window by title prefix, creates a crop-mode stream (full width × 128px, bottom-aligned playback bar). Polls every 5s for window appear/disappear. Independent of main capture lifecycle. |
-| **App** | `frontend/src/app.tsx` | Done | Pure UI shell. JetBrains Islands dark theme (Tailwind utilities). Top row: main capture + controls. Bottom island: YouTube Music playback bar (auto-detected). |
+| **Stream Status** | `frontend/src/streams.ts` | Done | `useStreamStatus()` hook. Polls `GET /streams` every 2s, returns `{ hasMain, hasYouTubeMusic }` booleans for UI visibility. |
+| **App** | `frontend/src/app.tsx` | Done | Pure viewer shell (~65 lines). JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. No control buttons — all lifecycle is server-managed. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
 | **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` and `@shadcn` aliases. |
 
@@ -501,13 +511,14 @@ Nekomaru-LiveUI-v2/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── biome.json                   # Biome formatter/linter config
-│   ├── index.ts                     # Entry point: Hono + Vite on single node:http port
+│   ├── index.ts                     # Entry point: Hono + Vite on single node:http port, auto-starts managers
 │   ├── common.ts                    # Constants (port, exe path, buffer capacity)
 │   ├── api.ts                       # Hono routes for /streams/* (exports ApiType for frontend RPC)
-│   ├── process.ts                   # Spawn/manage live-capture.exe child processes
-│   ├── buffer.ts                    # Per-stream circular frame buffer + SPS/PPS cache
+│   ├── process.ts                   # Spawn/manage live-capture.exe (generation counter, replace in-place)
+│   ├── buffer.ts                    # Per-stream circular frame buffer + SPS/PPS cache + reset()
 │   ├── protocol.ts                  # Incremental binary wire protocol parser
-│   └── selector.ts                  # Auto window selector (polls foreground, switches captures)
+│   ├── selector.ts                  # Auto window selector (replaces "main" stream on foreground change)
+│   └── youtube-music.ts             # YouTube Music manager (manages "youtube-music" crop stream)
 │
 └── frontend/                        # Frontend (React + Vite + Tailwind)
     ├── package.json
@@ -521,12 +532,11 @@ Nekomaru-LiveUI-v2/
     ├── debug.ts                     # Debug flags
     ├── src/                         # Application source (aliased as @/)
     │   ├── api.ts                   # Hono RPC client (imports ApiType from server)
-    │   ├── app.tsx                  # Pure UI shell (JetBrains Islands, delegates to hooks)
-    │   ├── capture.ts               # useCaptureControl() hook (auto-selector, stream lifecycle)
-    │   ├── youtube-music.ts         # useYouTubeMusicStream() hook (crop-mode playback bar)
+    │   ├── app.tsx                  # Pure viewer shell (hardcoded "main" + "youtube-music" streams)
+    │   ├── streams.ts               # useStreamStatus() hook (polls availability for UI visibility)
     │   └── stream/                  # Self-contained H.264 stream module
-    │       ├── index.tsx            # <StreamRenderer> component (Canvas + polling loop)
-    │       └── decoder.ts           # H264Decoder (WebCodecs + avcC + fetchInit)
+    │       ├── index.tsx            # <StreamRenderer> (generation-aware, owns decoder lifecycle)
+    │       └── decoder.ts           # H264Decoder (WebCodecs + avcC + fetchInit, retries 404/503)
     └── public/
         └── img/
 ```
