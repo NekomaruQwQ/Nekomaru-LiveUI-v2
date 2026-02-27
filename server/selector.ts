@@ -6,14 +6,20 @@
 // from the current capture target, the selector replaces the "main" stream
 // in-place (bumping its generation counter) instead of destroying and
 // recreating it.
+//
+// Include/exclude config is persisted to data/selector-config.json — loaded
+// on server start, written on every setConfig() call.  Falls back to
+// hardcoded defaults if the file is missing or corrupt.
 
-import { captureExePath } from "./common";
+import * as path from "node:path";
+import { captureExePath, dataDir } from "./common";
+import { loadJson, saveJson } from "./persist";
 import * as proc from "./process";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-/// Paths or substrings that qualify a window's executable for capture.
-const INCLUDE_LIST: string[] = [
+/// Default paths/substrings that qualify a window's executable for capture.
+const DEFAULT_INCLUDE_LIST: string[] = [
     "devenv.exe",
     "C:\\Program Files\\Microsoft Visual Studio Code\\Code.exe",
     "C:\\Program Files\\JetBrains\\",
@@ -23,11 +29,14 @@ const INCLUDE_LIST: string[] = [
     "E:\\SteamLibrary\\steamapps\\common\\",
 ];
 
-/// Paths or substrings that disqualify a window (checked case-insensitively).
-const EXCLUDE_LIST: string[] = [
+/// Default paths/substrings that disqualify a window (checked case-insensitively).
+const DEFAULT_EXCLUDE_LIST: string[] = [
     "gogh.exe",
     "vtube studio.exe",
 ];
+
+/// Persistence path for the include/exclude config.
+const configPath = path.join(dataDir, "selector-config.json");
 
 /// How often to poll the foreground window (ms).
 const POLL_INTERVAL_MS = 2000;
@@ -55,6 +64,11 @@ export interface SelectorStatus {
     currentHwnd: string | null;
 }
 
+export interface SelectorConfig {
+    includeList: string[];
+    excludeList: string[];
+}
+
 // ── Selector ─────────────────────────────────────────────────────────────────
 
 /// Tracks the auto-capture state and manages the polling timer.
@@ -68,6 +82,10 @@ class LiveWindowSelector {
     /// The hwnd we are currently capturing.  Compared against new foreground
     /// windows to decide whether to switch.
     private lastCaptureHwnd: string | null = null;
+
+    /// Mutable include/exclude lists — editable at runtime via the API.
+    private includeList: string[] = [...DEFAULT_INCLUDE_LIST];
+    private excludeList: string[] = [...DEFAULT_EXCLUDE_LIST];
 
     get active(): boolean {
         return this.timer !== null;
@@ -101,6 +119,31 @@ class LiveWindowSelector {
         };
     }
 
+    getConfig(): SelectorConfig {
+        return {
+            includeList: [...this.includeList],
+            excludeList: [...this.excludeList],
+        };
+    }
+
+    /// Replace include/exclude lists and persist to disk.
+    async setConfig(config: SelectorConfig): Promise<void> {
+        this.includeList = [...config.includeList];
+        this.excludeList = [...config.excludeList];
+        await saveJson(configPath, { includeList: this.includeList, excludeList: this.excludeList });
+        console.log(`[selector] config updated: ${this.includeList.length} include, ${this.excludeList.length} exclude`);
+    }
+
+    /// Load persisted config from disk, replacing the hardcoded defaults.
+    /// Falls back silently to defaults if the file is missing or corrupt.
+    async loadPersistedConfig(): Promise<void> {
+        const saved = await loadJson<SelectorConfig | null>(configPath, null);
+        if (!saved) return;
+        this.includeList = [...saved.includeList];
+        this.excludeList = [...saved.excludeList];
+        console.log(`[selector] loaded config from disk: ${this.includeList.length} include, ${this.excludeList.length} exclude`);
+    }
+
     // ── Poll logic ───────────────────────────────────────────────────────
 
     private async poll(): Promise<void> {
@@ -116,7 +159,7 @@ class LiveWindowSelector {
         // Log foreground change (title masked for privacy, same as original).
         console.log(`[selector] foreground: *** (${info.executable_path})`);
 
-        if (!shouldCapture(info.executable_path)) return;
+        if (!this.shouldCapture(info.executable_path)) return;
 
         // Already capturing this window.
         if (hwndStr === this.lastCaptureHwnd) return;
@@ -127,6 +170,17 @@ class LiveWindowSelector {
         proc.replaceStream(STREAM_ID, hwndStr, DEFAULT_WIDTH, DEFAULT_HEIGHT);
         this.lastCaptureHwnd = hwndStr;
         console.log(`[selector] capturing ${hwndStr} → stream ${STREAM_ID}`);
+    }
+
+    /// Determines whether a window's executable path qualifies for capture.
+    /// Must match at least one include entry (substring) and must not match
+    /// any exclude entry (case-insensitive substring).
+    private shouldCapture(executablePath: string): boolean {
+        const included = this.includeList.some((pattern) =>
+            executablePath.includes(pattern));
+        const excluded = this.excludeList.some((pattern) =>
+            executablePath.toLowerCase().includes(pattern));
+        return included && !excluded;
     }
 }
 
@@ -159,17 +213,7 @@ function formatHwnd(hwnd: number): string {
     return `0x${hwnd.toString(16).toUpperCase()}`;
 }
 
-/// Determines whether a window's executable path qualifies for capture.
-/// Mirrors the original Rust `should_capture` logic: must match at least one
-/// include entry and must not match any exclude entry.
-function shouldCapture(executablePath: string): boolean {
-    const included = INCLUDE_LIST.some((pattern) =>
-        executablePath.includes(pattern));
-    const excluded = EXCLUDE_LIST.some((pattern) =>
-        executablePath.toLowerCase().includes(pattern));
-    return included && !excluded;
-}
-
 // ── Singleton ────────────────────────────────────────────────────────────────
 
 export const selector = new LiveWindowSelector();
+await selector.loadPersistedConfig();

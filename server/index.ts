@@ -23,12 +23,14 @@ import { destroyAll } from "./process";
 import { selector } from "./selector";
 import { ytmManager } from "./youtube-music";
 import api from "./api";
+import stringsApi from "./strings";
 
 // ── Hono app ─────────────────────────────────────────────────────────────────
 
 const honoApp =
     new Hono()
-        .route("/streams", api);
+        .route("/streams", api)
+        .route("/strings", stringsApi);
 
 const honoServer =
     hono.getRequestListener(honoApp.fetch);
@@ -47,7 +49,7 @@ const viteServer =
 
 const httpServer =
     http.createServer(async (req, res) => {
-        if (req.url?.startsWith("/streams")) {
+        if (req.url?.startsWith("/streams") || req.url?.startsWith("/strings")) {
             await honoServer(req, res);
         } else {
             viteServer.middlewares(req, res);

@@ -10,6 +10,8 @@
 //   GET  /auto          → auto-selector status
 //   POST /auto          → start auto-selector
 //   DELETE /auto        → stop auto-selector
+//   GET  /auto/config   → auto-selector include/exclude lists
+//   PUT  /auto/config   → replace include/exclude lists
 //
 // Routes are method-chained so TypeScript infers the full route schema into
 // `typeof api`.  The frontend imports ApiType to create a typed Hono RPC client.
@@ -41,7 +43,7 @@ const api = new Hono()
 
     /// Create a new capture stream (spawns a live-capture.exe instance).
     /// Accepts either resample mode (`width` + `height`) or crop mode
-    /// (`cropWidth` + `cropHeight` + optional `cropAlign`).
+    /// (`cropMinX/Y` + `cropMaxX/Y` — absolute bounding box).
     .post("/",
         zValidator("json", z.union([
             z.object({
@@ -51,19 +53,17 @@ const api = new Hono()
             }),
             z.object({
                 hwnd: z.string(),
-                cropWidth: z.union([z.literal("full"), z.number().int().positive()]),
-                cropHeight: z.union([z.literal("full"), z.number().int().positive()]),
-                cropAlign: z.enum([
-                    "center", "top-left", "top", "top-right",
-                    "left", "right", "bottom-left", "bottom", "bottom-right",
-                ]).default("center"),
+                cropMinX: z.number().int().nonnegative(),
+                cropMinY: z.number().int().nonnegative(),
+                cropMaxX: z.number().int().positive(),
+                cropMaxY: z.number().int().positive(),
             }),
         ])),
         (c) => {
             const body = c.req.valid("json");
-            if ("cropWidth" in body) {
+            if ("cropMinX" in body) {
                 const stream = proc.createCropStream(
-                    body.hwnd, body.cropWidth, body.cropHeight, body.cropAlign);
+                    body.hwnd, body.cropMinX, body.cropMinY, body.cropMaxX, body.cropMaxY);
                 return c.json({ id: stream.id }, 201);
             }
             const stream = proc.createStream(body.hwnd, body.width, body.height);
@@ -97,6 +97,22 @@ const api = new Hono()
         selector.stop();
         return c.json({ ok: true });
     })
+
+    /// Get the auto-selector's include/exclude pattern lists.
+    .get("/auto/config", (c) => {
+        return c.json(selector.getConfig());
+    })
+
+    /// Replace the auto-selector's include/exclude pattern lists.
+    .put("/auto/config",
+        zValidator("json", z.object({
+            includeList: z.array(z.string()),
+            excludeList: z.array(z.string()),
+        })),
+        async (c) => {
+            await selector.setConfig(c.req.valid("json"));
+            return c.json({ ok: true });
+        })
 
     // ── Stream lifecycle ─────────────────────────────────────────────────
 
