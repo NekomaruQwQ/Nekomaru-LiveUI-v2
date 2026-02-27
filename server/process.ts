@@ -125,23 +125,20 @@ export function createStream(hwnd: string, width: number, height: number): Captu
         `hwnd=${hwnd}, resample ${width}x${height}`);
 }
 
-/// Spawn a crop-mode capture: extracts a subrect at native resolution.
+/// Spawn a crop-mode capture: extracts an absolute subrect at native resolution.
 ///
-/// `cropWidth`/`cropHeight` are either a pixel count (multiple of 16) or
-/// `"full"` for the source dimension.  `cropAlign` controls placement of the
-/// crop rect within the source window (e.g. "bottom", "center").
+/// The bounding box is in source-pixel coordinates.  Non-16-aligned dimensions
+/// are accepted; the encoder output is padded to the next multiple of 16.
 export function createCropStream(
     hwnd: string,
-    cropWidth: "full" | number,
-    cropHeight: "full" | number,
-    cropAlign: string): CaptureStream {
+    minX: number, minY: number,
+    maxX: number, maxY: number): CaptureStream {
     const id = crypto.randomUUID().slice(0, 8);
     return spawnCapture(id, hwnd,
         [captureExePath, "--hwnd", hwnd,
-            "--crop-width", String(cropWidth),
-            "--crop-height", String(cropHeight),
-            "--crop-align", cropAlign],
-        `hwnd=${hwnd}, crop ${cropWidth}x${cropHeight} ${cropAlign}`);
+            "--crop-min-x", String(minX), "--crop-min-y", String(minY),
+            "--crop-max-x", String(maxX), "--crop-max-y", String(maxY)],
+        `hwnd=${hwnd}, crop (${minX},${minY})..(${maxX},${maxY})`);
 }
 
 /// Replace the capture process behind a well-known stream ID.
@@ -177,15 +174,13 @@ export function replaceStream(id: string, hwnd: string, width: number, height: n
 export function replaceCropStream(
     id: string,
     hwnd: string,
-    cropWidth: "full" | number,
-    cropHeight: "full" | number,
-    cropAlign: string): CaptureStream {
+    minX: number, minY: number,
+    maxX: number, maxY: number): CaptureStream {
     const args = [
         captureExePath, "--hwnd", hwnd,
-        "--crop-width", String(cropWidth),
-        "--crop-height", String(cropHeight),
-        "--crop-align", cropAlign];
-    const label = `hwnd=${hwnd}, crop ${cropWidth}x${cropHeight} ${cropAlign}`;
+        "--crop-min-x", String(minX), "--crop-min-y", String(minY),
+        "--crop-max-x", String(maxX), "--crop-max-y", String(maxY)];
+    const label = `hwnd=${hwnd}, crop (${minX},${minY})..(${maxX},${maxY})`;
 
     const existing = streams.get(id);
     if (!existing) return spawnCapture(id, hwnd, args, label);

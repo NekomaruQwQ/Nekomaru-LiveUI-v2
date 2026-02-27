@@ -2,8 +2,9 @@
 //
 // Polls `enumerateWindows()` every 5 seconds looking for a window whose title
 // starts with "YouTube Music".  When found, creates (or replaces) a crop-mode
-// stream with the well-known ID "youtube-music" (full width, bottom 128px —
-// the playback bar).  When the window disappears, the stream is destroyed.
+// stream with the well-known ID "youtube-music" capturing the bottom 96px of
+// the window (the playback bar).  When the window disappears, the stream is
+// destroyed.
 //
 // Structurally parallel to `LiveWindowSelector` in selector.ts, but manages
 // the "youtube-music" stream instead of "main".
@@ -28,6 +29,8 @@ const STREAM_ID = "youtube-music";
 interface WindowInfo {
     hwnd: number;
     title: string;
+    width: number;
+    height: number;
 }
 
 export interface YouTubeMusicStatus {
@@ -80,17 +83,26 @@ class YouTubeMusicManager {
     private async poll(): Promise<void> {
         try {
             const windows = await proc.enumerateWindows() as WindowInfo[];
-            const ytm = windows.find((w) => w.title.startsWith(YTM_TITLE_PREFIX));
+            const ytm = windows.find((w) => w.title === "YouTube Music - Nekomaru LiveUI v2");
 
             if (ytm) {
                 const hwndStr = formatHwnd(ytm.hwnd);
 
                 if (hwndStr !== this.lastKnownHwnd) {
+                    console.log(`[capture:youtube-music] window detected: ${hwndStr} (${ytm.width}x${ytm.height})`);
                     // Window appeared or was restarted (new hwnd) —
                     // replaceCropStream is idempotent (creates or replaces).
-                    proc.replaceCropStream(STREAM_ID, hwndStr, "full", 128, "bottom");
+                    // Crop the bottom 96px of the window (playback bar).
+                    const titleBarHeight = 48;
+                    const barHeight = 112;
+                    const bottomMargin = 10;
+                    const rightMargin = 32;
+                    const minY = Math.max(0, ytm.height - barHeight - bottomMargin + titleBarHeight);
+                    const maxY = Math.max(minY, ytm.height - bottomMargin + titleBarHeight);
+                    proc.replaceCropStream(
+                        STREAM_ID, hwndStr, 0, minY, ytm.width - rightMargin, maxY);
                     this.lastKnownHwnd = hwndStr;
-                    console.log(`[ytm] capturing ${hwndStr}`);
+                    console.log(`[ytm] capturing ${hwndStr} (${ytm.width}x${ytm.height})`);
                 }
             } else if (this.lastKnownHwnd) {
                 // YouTube Music window disappeared — tear down the stream.
