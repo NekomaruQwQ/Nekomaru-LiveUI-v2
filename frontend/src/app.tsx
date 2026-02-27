@@ -1,68 +1,49 @@
-import { StreamRenderer } from './stream';
-import { useStreamStatus } from './streams';
-
-import { cn } from '@shadcn/lib/utils';
-
-// ── Styles (JetBrains Islands) ──────────────────────────────────────────
-
-/// Shared island panel style — dark surface, subtle border, soft shadow.
-const island = cn(
-    "border border-[#393b40] rounded-lg",
-    "shadow-[0_1px_3px_rgba(0,0,0,0.3),0_4px_12px_rgba(0,0,0,0.15)]",
-    "bg-[#2b2d30]");
-
-// ── App ─────────────────────────────────────────────────────────────────
+import { StreamRenderer } from '@/stream';
+import { useStreamStatus } from '@/streams';
+import { useStrings } from '@/strings';
+import Marquee from '@/components/marquee';
+import Grid from '@/components/grid';
 
 /// Pure viewer shell.  Stream lifecycle is fully server-managed — the
 /// frontend just renders two well-known stream IDs and polls for
 /// availability to show/hide the YouTube Music island.
 export function App() {
     const { hasYouTubeMusic } = useStreamStatus();
+    const strings = useStrings();
 
     return (
-        <div className="flex flex-col flex-1 gap-2 p-2">
-            <div className="flex flex-row flex-1 gap-2">
-                <div className={"flex flex-col flex-3 gap-2"}>
+        <Grid rows="1fr 60px" gap="2" className="w-screen h-screen p-2">
+            {/* Everything other than the YouTube Music island */}
+            <Grid columns="3fr 1fr" gap="2">
+                {/* Main Column: Marquee + Main Stream */}
+                <Grid rows="auto 1fr" gap="2">
                     {/* Top Row: Marquee Banner */}
-                    <div className={cn(island, "flex flex-col flex-1 overflow-hidden")}>
+                    <div className="island">
+                        {strings.marquee && <Marquee text={strings.marquee} />}
                     </div>
-                    {/* Top Row 2: Unused */}
-                    <div className={cn("flex flex-col flex-1 overflow-hidden")}>
-                    </div>
-                    {/* Main Content */}
-                    <div className={cn(island, "aspect-16-10 p-0.5 overflow-hidden")}>
-                        <div className="w-full rounded-md overflow-clip">
+                    <div className="island flex-col flex-1">
+                        <div className="flex-1 rounded-md items-center justify-center bg-[#1d1d1d]!">
                             <StreamRenderer streamId="main" />
                         </div>
                     </div>
-                    {/* Bottom Row: Unused */}
-                    <div className={cn(island, "flex flex-col flex-1 overflow-hidden")}>
-                    </div>
+                </Grid>
+                {/* Side Column: User Info */}
+                <div className="island p-2">
+                    <SidePanel />
                 </div>
-                <div className={cn(island, "flex-1 p-6 flex flex-col gap-3")}>
-                    <span className="text-[#bcc0cc]">Hi, I'm Nekomaru OwO</span>
-                </div>
+            </Grid>
+            {/* Bottom Row: YouTube Music (conditionally rendered) */}
+            <div className="island h-15 items-center justify-center bg-[#141414]!">
+                {hasYouTubeMusic && <StreamRenderer streamId="youtube-music" />}
             </div>
-            <div className={cn(island, "h-16 overflow-hidden")}>
-                {hasYouTubeMusic ? (
-                    <StreamRenderer streamId="youtube-music" />
-                ) : (
-                    <Placeholder>YouTube Music not detected</Placeholder>
-                )}
-            </div>
-        </div>
+        </Grid>
     );
 }
 
-// ── Sub-components ──────────────────────────────────────────────────────
 
-/// Centered placeholder shown when a stream is unavailable.
-function Placeholder({ children }: { children: React.ReactNode }) {
-    return (
-        <div className={cn(
-            "flex items-center justify-center",
-            "min-h-50 text-[#6f737a] text-sm")}>
-            {children}
-        </div>
-    );
+function SidePanel() {
+    return <div className={"w-full h-full flex-col flex-1 gap-3"}>
+        <span>Hi, I'm Nekomaru OwO</span>
+        {/* Add more user info or controls here */}
+    </div>;
 }

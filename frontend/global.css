@@ -12,24 +12,40 @@
     --color-green: #98C379;
     --color-red: #E06C75;
 
-}
+    /* semantic colors */
+    --foreground: #BCC0CC;
 
-:root {
     /* force dark theme */
     color-scheme: dark;
+}
 
-    /* global styles */
-    background: linear-gradient(135deg, #1a1b1e, #222327);
+div {
+    display: grid;
+    overflow: clip;
+
+    /* Override CSS Grid/Flex default (min-width/height: auto) so items can shrink below content size. */
+    min-width: 0;
+    min-height: 0;
 }
 
 div#app {
-    display: flex;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
+    background: linear-gradient(135deg, #1a1b1e, #222327);
 }
 
-div.canvas-container {
-    width: 1920px;
-    height: 1080px;
+/* Shared island panel style — dark surface, subtle border, soft shadow. */
+div.island {
+    border: 1px solid #393b40;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.15);
+    background-color: #2b2d30;
+}
+
+div.marquee span {
+    font-family: ZhunYuan, var(--font-sans);
+    font-size: 1.5rem;
+}
+
+@keyframes marquee {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
 }
