@@ -3,6 +3,7 @@ import { useStreamStatus } from "@/streams";
 import { useStrings } from "@/strings";
 import Marquee from "@/components/marquee";
 import Grid from "@/components/grid";
+import { ClockWidget } from "./widgets/clock";
 
 /// Pure viewer shell.  Stream lifecycle is fully server-managed — the
 /// frontend just renders two well-known stream IDs and polls for
@@ -14,7 +15,9 @@ export function App() {
     return (
         <Grid rows="1fr 60px" gap="2" className="w-screen h-screen p-2">
             {/* Everything other than the YouTube Music island */}
-            <Grid columns="3fr 1fr" gap="2">
+            <Grid columns="1fr 3fr 40px" gap="2">
+                {/* Side Column: User Info */}
+                <SidePanel />
                 {/* Main Column: Marquee + Main Stream */}
                 <Grid rows="auto 1fr" gap="2">
                     {/* Top Row: Marquee Banner */}
@@ -28,13 +31,11 @@ export function App() {
                     </div>
                 </Grid>
                 {/* Side Column: User Info */}
-                <div className="island p-2">
-                    <SidePanel />
-                </div>
+                <ActionPanel />
             </Grid>
             {/* Bottom Row: YouTube Music (conditionally rendered) */}
             <div className="island h-15 items-center justify-center">
-                {hasYouTubeMusic && <StreamRenderer streamId="youtube-music" chromaKey="#212121" />}
+                {hasYouTubeMusic && <StreamRenderer streamId="youtube-music" chromaKey="#212121" pollMs={1000} />}
             </div>
         </Grid>
     );
@@ -42,8 +43,21 @@ export function App() {
 
 
 function SidePanel() {
-    return <div className={"w-full h-full flex-col flex-1 gap-3"}>
-        <span>Hi, I'm Nekomaru OwO</span>
+    const strings = useStrings();
+    return <div className="flex! w-full h-full flex-col gap-2">
+        <div className="island p-2">
+            <ClockWidget />
+        </div>
+        <div className="island px-4 py-2 flex-1">
+            <pre className="font-sans">
+                {strings.message}
+            </pre>
+        </div>
+    </div>;
+}
+
+function ActionPanel() {
+    return <div className="island p-2 flex! w-full h-full flex-col">
         {/* Add more user info or controls here */}
     </div>;
 }

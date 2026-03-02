@@ -4,6 +4,10 @@ alias i := install
 
 list:
     just --list
+put key value:
+    curl -X PUT $'http://localhost:($env.LIVE_PORT)/strings/{{key}}' \
+        -H 'Content-Type: application/json' \
+        -d '{"value":"{{value}}"}'
 
 server:
     use .mod.nu run; \
@@ -13,9 +17,6 @@ server:
 app *args:
     use .mod.nu run; \
     run live-app app -x 1280 -y 720 {{args}}
-control *args:
-    use .mod.nu run; \
-    run live-control app {{args}}
 youtube-music *args:
     use .mod.nu run; \
     run live-app youtube-music \

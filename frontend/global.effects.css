@@ -110,27 +110,20 @@
    back to 0% every cycle, creating a jarring discontinuity.
    ────────────────────────────────────────────────────────────────────────── */
 
-div#app {
-    /* Five stacked backgrounds (top → bottom):
-       1. Blue blob    — centered at top-left quadrant
-       2. Purple blob  — centered at bottom-right area
-       3. Cyan blob    — centered at bottom-center
-       4. Orange blob  — centered at top-right area
-       5. Dark base    — solid diagonal gradient, never moves */
+/* TEMPORARILY DISABLED — evaluating island effects in isolation.
+   The flat dark base from global.css shows through instead. */
+
+/* div#app {
     background:
-        radial-gradient(circle at 20% 30%, oklch(0.70 0.15 240 / 0.30) 0%, transparent 70%),  /* blue   */
-        radial-gradient(circle at 75% 60%, oklch(0.70 0.15 320 / 0.30) 0%, transparent 70%),  /* purple */
-        radial-gradient(circle at 50% 80%, oklch(0.70 0.15 190 / 0.30) 0%, transparent 70%),  /* cyan   */
-        radial-gradient(circle at 80% 15%, oklch(0.70 0.15  65 / 0.30) 0%, transparent 70%),  /* orange */
-        linear-gradient(135deg, #1a1b1e, #222327);                                            /* dark base */
+        radial-gradient(circle at 20% 30%, oklch(0.70 0.15 240 / 0.30) 0%, transparent 70%),
+        radial-gradient(circle at 75% 60%, oklch(0.70 0.15 320 / 0.30) 0%, transparent 70%),
+        radial-gradient(circle at 50% 80%, oklch(0.70 0.15 190 / 0.30) 0%, transparent 70%),
+        radial-gradient(circle at 80% 15%, oklch(0.70 0.15  65 / 0.30) 0%, transparent 70%),
+        linear-gradient(135deg, #1a1b1e, #222327);
 
-    /* Each gradient layer is painted on an oversized virtual canvas.
-       Larger canvas = more travel distance when background-position shifts
-       = faster apparent movement.  The dark base stays at natural size. */
     background-size: 200% 200%, 250% 250%, 300% 300%, 220% 220%, 100% 100%;
-
     animation: mesh-drift 5s ease-in-out infinite alternate;
-}
+} */
 
 /* background-position is a comma-separated list, one value per background
    layer (matching the order in the `background` shorthand above).
@@ -172,7 +165,7 @@ div#app {
                                  animation instance.
    ────────────────────────────────────────────────────────────────────────── */
 
-@property --border-hue {
+@property --theme-hue {
     syntax: "<angle>";
     initial-value: 240deg;
     inherits: false;
@@ -283,29 +276,32 @@ div#app {
    ────────────────────────────────────────────────────────────────────────── */
 
 div.island {
-    --border-hue: 240deg;
+    color: var(--theme-color);
+
+    --theme-hue: 240deg;
+    --theme-color: oklch(0.70 0.08 var(--theme-hue) / 1);
 
     /* Colored border — shifts hue with the animation */
-    border: 1px solid oklch(0.70 0.15 var(--border-hue) / 0.4);
+    border: 1px solid oklch(0.70 0.15 var(--theme-hue) / 0.4);
 
     /* Four-layer shadow stack: inset glow, top highlight, near shadow, far shadow */
     box-shadow:
-        inset 0 0 30px oklch(0.70 0.08 var(--border-hue) / 0.12),   /* colored rim glow (main effect) */
+        inset 0 0 30px oklch(0.70 0.08 var(--theme-hue) / 0.12),   /* colored rim glow (main effect) */
         inset 0 1px 0 rgba(255, 255, 255, 0.08),                     /* top-edge highlight */
         0 1px 3px rgba(0, 0, 0, 0.3),                                /* tight contact shadow */
         0 4px 12px rgba(0, 0, 0, 0.15);                              /* wide ambient shadow */
 
     /* Near-opaque dark fill with a hint of the current hue.
        8% transparency lets the blurred mesh gradient seep through. */
-    background: oklch(0.18 0.01 var(--border-hue) / 0.92);
+    background: oklch(0.18 0.01 var(--theme-hue) / 0.92);
 
     /* Blur whatever is behind (the mesh gradient) before compositing
        this element on top — turns gradient blobs into a smooth wash. */
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
 
-    /* 8-second cycle through the four One Dark accent hues */
-    animation: cycle-border-hue 8s ease-in-out infinite;
+    /* 16-second cycle through the four One Dark accent hues */
+    animation: cycle-border-hue 16s ease-in-out infinite;
 }
 
 /* Smoothly cycles --border-hue through the four One Dark accent colors.
@@ -313,9 +309,9 @@ div.island {
    between stops instead of snapping.  Starts and ends at 240° (blue)
    for a seamless loop without needing "alternate" direction. */
 @keyframes cycle-border-hue {
-    0%   { --border-hue: 240deg; }  /* blue   */
-    25%  { --border-hue: 320deg; }  /* purple */
-    50%  { --border-hue: 190deg; }  /* cyan   */
-    75%  { --border-hue:  65deg; }  /* orange */
-    100% { --border-hue: 240deg; }  /* blue   */
+    0%   { --theme-hue: 240deg; }  /* blue   */
+    25%  { --theme-hue: 210deg; }  /* cyan   */
+    50%  { --theme-hue:  50deg; }  /* orange */
+    75%  { --theme-hue: -60deg; }  /* purple */
+    100% { --theme-hue:-120deg; }  /* blue   */
 }
