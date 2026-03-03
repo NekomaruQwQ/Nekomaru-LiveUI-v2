@@ -70,4 +70,14 @@ const api = new Hono()
 /// client via `hc<StringsApiType>("/strings")`.
 export type StringsApiType = typeof api;
 
+/// Re-read strings.json from disk, replacing all in-memory entries.
+/// Falls back silently to the current state if the file is missing or corrupt.
+export async function reloadStore(): Promise<void> {
+    const saved = await loadJson<Record<string, string> | null>(stringsPath, null);
+    if (!saved) return;
+    store.clear();
+    for (const [k, v] of Object.entries(saved)) store.set(k, v);
+    console.log(`[strings] reloaded ${store.size} entries from disk`);
+}
+
 export default api;

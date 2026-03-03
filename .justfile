@@ -4,10 +4,8 @@ alias i := install
 
 list:
     just --list
-put key value:
-    http put $'http://localhost:($env.LIVE_PORT)/strings/{{key}}' \
-        --content-type application/json \
-        { value: "{{value}}" }
+refresh:
+    curl -X POST $"http://localhost:($env.LIVE_PORT)/refresh"
 
 server:
     use .mod.nu run; \

@@ -410,6 +410,14 @@ Server-managed key-value string store. The control panel (or curl) writes values
 { "ok": true }
 ```
 
+### Refresh
+
+**`POST /refresh`** — Reload selector config and string store from their local files (`data/selector-config.json`, `data/strings.json`). Useful after editing these files by hand or via an external tool.
+
+```json
+{ "ok": true }
+```
+
 ---
 
 ## Implementation Status

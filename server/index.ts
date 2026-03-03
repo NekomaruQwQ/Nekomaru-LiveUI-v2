@@ -23,14 +23,21 @@ import { destroyAll } from "./process";
 import { selector } from "./selector";
 import { ytmManager } from "./youtube-music";
 import api from "./api";
-import stringsApi from "./strings";
+import stringsApi, { reloadStore } from "./strings";
 
 // ── Hono app ─────────────────────────────────────────────────────────────────
 
 const honoApp =
     new Hono()
         .route("/streams", api)
-        .route("/strings", stringsApi);
+        .route("/strings", stringsApi)
+
+        /// Reload selector config and string store from disk.
+        .post("/refresh", async (c) => {
+            await selector.loadPersistedConfig();
+            await reloadStore();
+            return c.json({ ok: true });
+        });
 
 const honoServer =
     hono.getRequestListener(honoApp.fetch);
@@ -49,7 +56,7 @@ const viteServer =
 
 const httpServer =
     http.createServer(async (req, res) => {
-        if (req.url?.startsWith("/streams") || req.url?.startsWith("/strings")) {
+        if (req.url?.startsWith("/streams") || req.url?.startsWith("/strings") || req.url?.startsWith("/refresh")) {
             await honoServer(req, res);
         } else {
             viteServer.middlewares(req, res);
