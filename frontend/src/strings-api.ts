@@ -6,5 +6,5 @@
 import { hc } from "hono/client";
 import type { StringsApiType } from "../../server/strings";
 
-/// Typed Hono RPC client for /strings endpoints.
-export const stringsApi = hc<StringsApiType>("/strings");
+/// Typed Hono RPC client for /api/v1/strings endpoints.
+export const stringsApi = hc<StringsApiType>("/api/v1/strings");

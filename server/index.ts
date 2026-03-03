@@ -29,11 +29,11 @@ import stringsApi, { reloadStore } from "./strings";
 
 const honoApp =
     new Hono()
-        .route("/streams", api)
-        .route("/strings", stringsApi)
+        .route("/api/v1/streams", api)
+        .route("/api/v1/strings", stringsApi)
 
         /// Reload selector config and string store from disk.
-        .post("/refresh", async (c) => {
+        .post("/api/v1/refresh", async (c) => {
             await selector.loadPersistedConfig();
             await reloadStore();
             return c.json({ ok: true });
@@ -56,7 +56,7 @@ const viteServer =
 
 const httpServer =
     http.createServer(async (req, res) => {
-        if (req.url?.startsWith("/streams") || req.url?.startsWith("/strings") || req.url?.startsWith("/refresh")) {
+        if (req.url?.startsWith("/api/")) {
             await honoServer(req, res);
         } else {
             viteServer.middlewares(req, res);

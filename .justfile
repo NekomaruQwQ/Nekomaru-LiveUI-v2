@@ -5,7 +5,7 @@ alias i := install
 list:
     just --list
 refresh:
-    curl -X POST $"http://localhost:($env.LIVE_PORT)/refresh"
+    curl -X POST $"http://localhost:($env.LIVE_PORT)/api/v1/refresh"
 
 server:
     use .mod.nu run; \

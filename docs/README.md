@@ -44,7 +44,7 @@ LIVE_PORT=3000 cargo run -p live-app
 
 # (Optional) Manual capture via curl (the server manages "main" and
 # "youtube-music" automatically, but you can still create extra streams)
-curl -X POST http://localhost:3000/streams \
+curl -X POST http://localhost:3000/api/v1/streams \
     -H 'Content-Type: application/json' \
     -d '{"hwnd":"0x1A2B3C", "width":1920, "height":1200}'
 ```
@@ -104,7 +104,7 @@ The project is split into four independently running components. The hard work (
 │    - Well-known IDs map to frontend display locations             │
 │    - Control panel or curl writes, frontend polls                 │
 │                                                                  │
-│  HTTP API                                                        │
+│  HTTP API (all under /api/v1)                                    │
 │    - /streams             → list / create / delete captures      │
 │    - /streams/auto        → start / stop / status auto-selector  │
 │    - /streams/auto/config → get / set include/exclude patterns   │
@@ -131,7 +131,7 @@ The project is split into four independently running components. The hard work (
 │    - StreamRenderer (Canvas rendering, ~60fps polling)           │
 │    - Generation-aware: reinits decoder on stream replacement     │
 │    - Hardcoded stream IDs: "main" + "youtube-music"              │
-│    - Polls /strings for dynamic text display by well-known ID    │
+│    - Polls /api/v1/strings for dynamic text display by well-known ID │
 │    - Multiple viewers can connect to the same stream             │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -294,11 +294,11 @@ Logging goes to stderr.
 
 ## HTTP API
 
-Served by LiveServer (Hono on Bun). Port is preconfigured via environment variable or hardcoded default.
+Served by LiveServer (Hono on Bun). Port is preconfigured via environment variable or hardcoded default. All endpoints are prefixed with `/api/v1`.
 
 ### Stream Management
 
-**`GET /streams`** — List active capture streams.
+**`GET /api/v1/streams`** — List active capture streams.
 
 ```json
 [
@@ -306,7 +306,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 ]
 ```
 
-**`POST /streams`** — Create a new capture (spawns a `live-capture.exe` instance). Accepts either resample mode or crop mode (mutually exclusive).
+**`POST /api/v1/streams`** — Create a new capture (spawns a `live-capture.exe` instance). Accepts either resample mode or crop mode (mutually exclusive).
 
 ```json
 // Resample mode — scale the full window to fit width × height
@@ -319,11 +319,11 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 { "id": "abc123" }
 ```
 
-**`DELETE /streams/:id`** — Stop and remove a capture (kills the child process).
+**`DELETE /api/v1/streams/:id`** — Stop and remove a capture (kills the child process).
 
 ### Stream Data
 
-**`GET /streams/:id/init`** — Codec parameters for decoder initialization.
+**`GET /api/v1/streams/:id/init`** — Codec parameters for decoder initialization.
 
 ```json
 {
@@ -334,7 +334,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 }
 ```
 
-**`GET /streams/:id/frames?after=N`** — Encoded frames after sequence number N.
+**`GET /api/v1/streams/:id/frames?after=N`** — Encoded frames after sequence number N.
 
 ```json
 {
@@ -348,21 +348,21 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 
 The `generation` field increments each time the underlying capture process is replaced (e.g. window switch). The frontend uses this to detect replacements and reinitialize its decoder. The base64 `data` field contains a pre-serialized binary payload (timestamp + NAL units). Keyframe status is inferred from NAL unit types on the frontend.
 
-**`GET /streams/windows`** — List capturable windows (one-shot spawn of `live-capture.exe --enumerate-windows`).
+**`GET /api/v1/streams/windows`** — List capturable windows (one-shot spawn of `live-capture.exe --enumerate-windows`).
 
 ### Auto Window Selector
 
-**`GET /streams/auto`** — Get auto-selector status.
+**`GET /api/v1/streams/auto`** — Get auto-selector status.
 
 ```json
 { "active": true, "currentStreamId": "main", "currentHwnd": "0x1A2B3C" }
 ```
 
-**`POST /streams/auto`** — Start the auto-selector (idempotent). Polls the foreground window every 2 seconds and automatically switches captures when the foreground matches the include list. The managed stream always has ID `"main"`.
+**`POST /api/v1/streams/auto`** — Start the auto-selector (idempotent). Polls the foreground window every 2 seconds and automatically switches captures when the foreground matches the include list. The managed stream always has ID `"main"`.
 
-**`DELETE /streams/auto`** — Stop the auto-selector and destroy the `"main"` stream.
+**`DELETE /api/v1/streams/auto`** — Stop the auto-selector and destroy the `"main"` stream.
 
-**`GET /streams/auto/config`** — Get the auto-selector's include/exclude pattern lists.
+**`GET /api/v1/streams/auto/config`** — Get the auto-selector's include/exclude pattern lists.
 
 ```json
 {
@@ -371,7 +371,7 @@ The `generation` field increments each time the underlying capture process is re
 }
 ```
 
-**`PUT /streams/auto/config`** — Replace the include/exclude pattern lists. Include patterns use substring matching on the executable path. Exclude patterns use case-insensitive substring matching.
+**`PUT /api/v1/streams/auto/config`** — Replace the include/exclude pattern lists. Include patterns use substring matching on the executable path. Exclude patterns use case-insensitive substring matching.
 
 ```json
 // Request body
@@ -388,13 +388,13 @@ The `generation` field increments each time the underlying capture process is re
 
 Server-managed key-value string store. The control panel (or curl) writes values; the frontend polls and displays them at designated locations by well-known ID.
 
-**`GET /strings`** — Get all key-value pairs.
+**`GET /api/v1/strings`** — Get all key-value pairs.
 
 ```json
 { "test": "Hello World", "banner": "Live now!" }
 ```
 
-**`PUT /strings/:key`** — Set a string value (idempotent).
+**`PUT /api/v1/strings/:key`** — Set a string value (idempotent).
 
 ```json
 // Request body
@@ -404,7 +404,7 @@ Server-managed key-value string store. The control panel (or curl) writes values
 { "ok": true }
 ```
 
-**`DELETE /strings/:key`** — Delete a string.
+**`DELETE /api/v1/strings/:key`** — Delete a string.
 
 ```json
 { "ok": true }
@@ -412,7 +412,7 @@ Server-managed key-value string store. The control panel (or curl) writes values
 
 ### Refresh
 
-**`POST /refresh`** — Reload selector config and string store from their local files (`data/selector-config.json`, `data/strings.json`). Useful after editing these files by hand or via an external tool.
+**`POST /api/v1/refresh`** — Reload selector config and string store from their local files (`data/selector-config.json`, `data/strings.json`). Useful after editing these files by hand or via an external tool.
 
 ```json
 { "ok": true }
@@ -463,8 +463,8 @@ Server-managed key-value string store. The control panel (or curl) writes values
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/streams` → API, everything else → Vite. Auto-starts selector and YTM manager on boot. SIGINT/SIGTERM cleanup. |
-| **Stream API** | `server/api.ts` | Done | Hono routes: `GET/POST/DELETE /streams`, `GET/POST/DELETE /streams/auto`, `GET/PUT /streams/auto/config`, `GET /streams/:id/init`, `GET /streams/:id/frames?after=N`, `GET /streams/windows`. POST accepts resample or crop mode (Zod union — crop uses absolute bounding box). `generation` field in list and frames responses. |
+| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/api/v1/*` → Hono, everything else → Vite. Auto-starts selector and YTM manager on boot. SIGINT/SIGTERM cleanup. |
+| **Stream API** | `server/api.ts` | Done | Hono sub-router mounted at `/api/v1/streams`. Routes: `GET/POST/DELETE /`, `GET/POST/DELETE /auto`, `GET/PUT /auto/config`, `GET /:id/init`, `GET /:id/frames?after=N`, `GET /windows`. POST accepts resample or crop mode (Zod union — crop uses absolute bounding box). `generation` field in list and frames responses. |
 | **Process Manager** | `server/process.ts` | Done | `CaptureStream` with `generation` counter. `spawnAndWire()` helper shared by create and replace paths. `createStream()`/`createCropStream()` for manual use (random IDs). `replaceStream()`/`replaceCropStream()` for well-known IDs — kills old process, resets buffer, bumps generation in-place (idempotent: creates if missing). Crop streams use absolute bounding box (minX/Y, maxX/Y). |
 | **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
 | **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. `reset()` clears all state on stream replacement. |
@@ -472,16 +472,16 @@ Server-managed key-value string store. The control panel (or curl) writes values
 | **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Mutable include/exclude lists (editable at runtime via `GET/PUT /auto/config`). Config persisted to `data/selector-config.json` — loaded on startup, written on every change. Uses `replaceStream("main", ...)` — stream ID is always `"main"`, generation bumps on each switch. |
 | **YouTube Music Manager** | `server/youtube-music.ts` | Done | `YouTubeMusicManager` class. Polls `enumerateWindows()` every 5s, finds window by `"YouTube Music"` title prefix. Creates/replaces `"youtube-music"` crop stream (bottom 96px computed from window dimensions). Destroys stream when window disappears. |
 | **Persistence** | `server/persist.ts` | Done | Thin JSON file persistence utility. `loadJson(path, fallback)` / `saveJson(path, data)` using Bun APIs. Creates `data/` directory on module load. |
-| **String Store** | `server/strings.ts` | Done | `Map<string, string>` persisted to `data/strings.json`. Hono routes: `GET /` (all pairs), `PUT /:key` (set + save), `DELETE /:key` (delete + save). Loaded from disk on startup, falls back to empty. Exports `StringsApiType` for frontend RPC. Mounted at `/strings` in `index.ts`. |
+| **String Store** | `server/strings.ts` | Done | `Map<string, string>` persisted to `data/strings.json`. Hono routes: `GET /` (all pairs), `PUT /:key` (set + save), `DELETE /:key` (delete + save). Loaded from disk on startup, falls back to empty. Exports `StringsApiType` for frontend RPC. Mounted at `/api/v1/strings` in `index.ts`. |
 
 ### Completed (Frontend — React + Hono RPC)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **API Client** | `frontend/src/api.ts` | Done | Typed Hono RPC client via `hc<ApiType>("/streams")`. Imports server route type for end-to-end type safety. |
-| **Strings API Client** | `frontend/src/strings-api.ts` | Done | Typed Hono RPC client via `hc<StringsApiType>("/strings")`. Same pattern as `api.ts`. |
-| **Stream Status** | `frontend/src/streams.ts` | Done | `useStreamStatus()` hook. Polls `GET /streams` every 2s, returns `{ hasMain, hasYouTubeMusic }` booleans for UI visibility. |
-| **String Store Hook** | `frontend/src/strings.ts` | Done | `useStrings()` hook. Polls `GET /strings` every 2s, returns `Record<string, string>` of all key-value pairs. |
+| **API Client** | `frontend/src/api.ts` | Done | Typed Hono RPC client via `hc<ApiType>("/api/v1/streams")`. Imports server route type for end-to-end type safety. |
+| **Strings API Client** | `frontend/src/strings-api.ts` | Done | Typed Hono RPC client via `hc<StringsApiType>("/api/v1/strings")`. Same pattern as `api.ts`. |
+| **Stream Status** | `frontend/src/streams.ts` | Done | `useStreamStatus()` hook. Polls `GET /api/v1/streams` every 2s, returns `{ hasMain, hasYouTubeMusic }` booleans for UI visibility. |
+| **String Store Hook** | `frontend/src/strings.ts` | Done | `useStrings()` hook. Polls `GET /api/v1/strings` every 2s, returns `Record<string, string>` of all key-value pairs. |
 | **App** | `frontend/src/app.tsx` | Done | Pure viewer shell. JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. Displays server-managed strings by well-known ID (e.g. `"test"` in sidebar, `"marquee"` in scrolling top banner). No control buttons — all lifecycle is server-managed. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
 | **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` and `@shadcn` aliases. |
@@ -636,7 +636,7 @@ Nekomaru-LiveUI-v2/
 │   ├── biome.json                   # Biome formatter/linter config
 │   ├── index.ts                     # Entry point: Hono + Vite on single node:http port, auto-starts managers
 │   ├── common.ts                    # Constants (port, exe path, buffer capacity, data dir)
-│   ├── api.ts                       # Hono routes for /streams/* (exports ApiType for frontend RPC)
+│   ├── api.ts                       # Hono routes for /api/v1/streams/* (exports ApiType for frontend RPC)
 │   ├── process.ts                   # Spawn/manage live-capture.exe (generation counter, replace in-place)
 │   ├── buffer.ts                    # Per-stream circular frame buffer + SPS/PPS cache + reset()
 │   ├── protocol.ts                  # Incremental binary wire protocol parser
@@ -657,10 +657,10 @@ Nekomaru-LiveUI-v2/
     ├── debug.ts                     # Debug flags
     ├── src/                         # Application source (aliased as @/)
     │   ├── api.ts                   # Hono RPC client (imports ApiType from server)
-    │   ├── strings-api.ts           # Hono RPC client for /strings (imports StringsApiType)
+    │   ├── strings-api.ts           # Hono RPC client for /api/v1/strings (imports StringsApiType)
     │   ├── app.tsx                  # Pure viewer shell (streams + server-managed strings by ID)
     │   ├── streams.ts               # useStreamStatus() hook (polls availability for UI visibility)
-    │   ├── strings.ts               # useStrings() hook (polls /strings every 2s)
+    │   ├── strings.ts               # useStrings() hook (polls /api/v1/strings every 2s)
     │   └── stream/                  # Self-contained H.264 stream module
     │       ├── index.tsx            # <StreamRenderer> (generation-aware, owns decoder lifecycle)
     │       └── decoder.ts           # H264Decoder (WebCodecs + avcC + fetchInit, retries 404/503)

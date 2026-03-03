@@ -8,6 +8,6 @@
 import { hc } from "hono/client";
 import type { ApiType } from "../../server/api";
 
-/// Typed Hono RPC client.  All endpoints under /streams are accessible via
-/// this client (e.g. `api.index.$get()`, `api[":id"].init.$get(...)`).
-export const api = hc<ApiType>("/streams");
+/// Typed Hono RPC client.  All endpoints under /api/v1/streams are accessible
+/// via this client (e.g. `api.index.$get()`, `api[":id"].init.$get(...)`).
+export const api = hc<ApiType>("/api/v1/streams");
