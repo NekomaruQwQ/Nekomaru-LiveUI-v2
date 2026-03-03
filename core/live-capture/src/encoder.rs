@@ -177,8 +177,11 @@ impl H264Encoder {
         for (name, api, value) in [
             // No B-frames for low latency (B-frames add 2+ frame latency)
             ("B-frame count", &CODECAPI_AVEncMPVDefaultBPictureCount, VARIANT::from(0)),
-            // GOP size = 2 seconds (e.g. 120 frames at 60fps for fast recovery)
-            ("GOP size", &CODECAPI_AVEncMPVGOPSize, VARIANT::from(config.frame_rate * 2)),
+            // All-IDR at very low frame rates (≤5fps): keyframe wait is eliminated
+            // and the bitrate cost is negligible for small/static content.
+            // At higher rates, GOP = 2 seconds for fast recovery from packet loss.
+            ("GOP size", &CODECAPI_AVEncMPVGOPSize, VARIANT::from(
+                if config.frame_rate <= 5 { 1 } else { config.frame_rate * 2 })),
             // Low latency mode
             ("Low latency mode", &CODECAPI_AVLowLatencyMode, VARIANT::from(true)),
             // CBR rate control (constant bitrate for predictable latency)

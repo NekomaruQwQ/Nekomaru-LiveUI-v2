@@ -13,9 +13,6 @@ import * as proc from "./process";
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
-/// Title prefix used to identify the YouTube Music window.
-const YTM_TITLE_PREFIX = "YouTube Music";
-
 /// How often to re-check for the YouTube Music window (ms).
 /// Slow poll — this isn't latency-sensitive.
 const POLL_INTERVAL_MS = 5000;
@@ -100,7 +97,7 @@ class YouTubeMusicManager {
                     const minY = Math.max(0, ytm.height - barHeight - bottomMargin + titleBarHeight);
                     const maxY = Math.max(minY, ytm.height - bottomMargin + titleBarHeight);
                     proc.replaceCropStream(
-                        STREAM_ID, hwndStr, 0, minY, ytm.width - rightMargin, maxY, 1);
+                        STREAM_ID, hwndStr, 0, minY, ytm.width - rightMargin, maxY, 2);
                     this.lastKnownHwnd = hwndStr;
                     console.log(`[ytm] capturing ${hwndStr} (${ytm.width}x${ytm.height})`);
                 }
