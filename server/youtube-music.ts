@@ -96,8 +96,13 @@ class YouTubeMusicManager {
                     const rightMargin = 96;
                     const minY = Math.max(0, ytm.height - barHeight - bottomMargin + titleBarHeight);
                     const maxY = Math.max(minY, ytm.height - bottomMargin + titleBarHeight);
+                    const maxX = ytm.width - rightMargin;
+
+                    // Skip if the window is too small for a meaningful crop box.
+                    if (maxX <= 0 || maxY <= minY) return;
+
                     proc.replaceCropStream(
-                        STREAM_ID, hwndStr, 0, minY, ytm.width - rightMargin, maxY, 2);
+                        STREAM_ID, hwndStr, 0, minY, maxX, maxY, 2);
                     this.lastKnownHwnd = hwndStr;
                     console.log(`[ytm] capturing ${hwndStr} (${ytm.width}x${ytm.height})`);
                 }
