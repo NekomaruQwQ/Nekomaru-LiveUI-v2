@@ -275,6 +275,19 @@ fn run(hwnd: isize, mode: CaptureMode, frame_rate: u32) -> anyhow::Result<()> {
             &[0.16, 0.16, 0.16, 1.0]);
     }
 
+    // Deferred context for recording capture commands (clear + copy/resample)
+    // into atomic command lists.  ExecuteCommandList on the immediate context
+    // is a single API call, serialized by ID3D11Multithread protection — the
+    // encoding thread's NV12 convert cannot interleave mid-batch.
+    // SAFETY: `device` is a valid D3D11 device; flags = 0 (no special options).
+    let deferred_context: ID3D11DeviceContext = {
+        let mut ctx = None;
+        // SAFETY: `device` is a valid D3D11 device; `ctx` is a stack-local out-param.
+        unsafe { device.CreateDeferredContext(0, Some(&raw mut ctx)) }
+            .context("failed to create deferred context")?;
+        ctx.ok_or_else(|| anyhow::anyhow!("deferred context is null"))?
+    };
+
     // Only needed in resample mode; skip shader compilation in crop mode.
     let resampler = if crop_box.is_none() {
         Some(Resampler::new(&device).context("failed to create resampler")?)
@@ -306,17 +319,28 @@ fn run(hwnd: isize, mode: CaptureMode, frame_rate: u32) -> anyhow::Result<()> {
 
         match capture.get_next_frame(&device_context) {
             Ok(Some(frame)) => {
+                // Record clear + write as an atomic command batch on the
+                // deferred context, so the encoding thread's NV12 convert
+                // (which uses the immediate context) cannot interleave.
+                // SAFETY: `deferred_context` and `staging_bgra8_rtv` are valid
+                // D3D11 objects from the same device.
+                unsafe {
+                    deferred_context.ClearRenderTargetView(
+                        &staging_bgra8_rtv,
+                        &[0.16, 0.16, 0.16, 1.0]);
+                }
+
                 if let Some(crop) = crop_box {
                     // ── Crop path ────────────────────────────────────
                     // Copy a subrect of the captured frame into staging_bgra8
                     // at native resolution (no scaling).  The D3D11_BOX is
                     // clamped to source bounds by `to_d3d11_box`.
                     let d3d_box = crop.to_d3d11_box(frame.size);
-                    // SAFETY: `device_context`, `staging_bgra8`, and `frame.raw_texture`
+                    // SAFETY: `deferred_context`, `staging_bgra8`, and `frame.raw_texture`
                     // are valid D3D11 objects from the same device. `d3d_box` is clamped
                     // to stay within source bounds by `CropBox::to_d3d11_box`.
                     unsafe {
-                        device_context.CopySubresourceRegion(
+                        deferred_context.CopySubresourceRegion(
                             &staging_bgra8,    // dst
                             0,                 // dst subresource
                             0, 0, 0,           // dst x, y, z
@@ -330,23 +354,41 @@ fn run(hwnd: isize, mode: CaptureMode, frame_rate: u32) -> anyhow::Result<()> {
                     // aspect-ratio-preserving letterboxing.
                     let viewport =
                         capture::calculate_resample_viewport(frame.size, frame_size);
-                    // SAFETY: `device_context` is valid; `viewport` is a stack-local struct.
-                    unsafe { device_context.RSSetViewports(Some(&[viewport])); }
+                    // SAFETY: `deferred_context` is valid; `viewport` is a stack-local struct.
+                    unsafe { deferred_context.RSSetViewports(Some(&[viewport])); }
 
                     let source_srv =
                         d3d11::create_srv_for_texture_2d(&device, &frame.raw_texture)
                             .context("failed to create SRV for captured frame")?;
                     resampler.as_ref().unwrap()
-                        .resample(&device_context, &source_srv, &staging_bgra8_rtv);
+                        .resample(&deferred_context, &source_srv, &staging_bgra8_rtv);
 
-                    // SAFETY: `device_context` is valid; clearing the viewport array.
-                    unsafe { device_context.RSSetViewports(Some(&[])); }
+                    // SAFETY: `deferred_context` is valid; clearing the viewport array.
+                    unsafe { deferred_context.RSSetViewports(Some(&[])); }
                 }
 
-                // Flush GPU commands so the encoding thread sees the new frame.
-                // The small sleep gives the GPU time to finish before the encoder reads.
-                // SAFETY: `device_context` is a valid D3D11 device context.
-                unsafe { device_context.Flush(); }
+                // Finalize the recorded commands and execute them atomically
+                // on the immediate context.  ExecuteCommandList is a single
+                // API call, serialized by ID3D11Multithread protection — the
+                // encoding thread cannot interleave its NV12 convert mid-batch.
+                // SAFETY: `deferred_context` has recorded valid GPU commands above.
+                // `false` = do not restore deferred context state (we re-record each frame).
+                let command_list = {
+                    let mut list = None;
+                    // SAFETY: `deferred_context` has recorded valid GPU commands above.
+                    // `false` = do not restore deferred context state (we re-record each frame).
+                    unsafe { deferred_context.FinishCommandList(false, Some(&raw mut list)) }
+                        .context("FinishCommandList failed")?;
+                    list.ok_or_else(|| anyhow::anyhow!("command list is null"))?
+                };
+                // SAFETY: `device_context` is a valid immediate context; `command_list`
+                // was produced by `FinishCommandList` above.
+                // `true` = restore immediate context state after execution, preserving
+                // the encoding thread's pipeline state.
+                unsafe {
+                    device_context.ExecuteCommandList(&command_list, true);
+                    device_context.Flush();
+                }
                 thread::sleep(Duration::from_millis(5));
             },
             Ok(None) => {
