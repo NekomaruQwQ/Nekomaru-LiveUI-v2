@@ -8,7 +8,9 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
+env_logger = { workspace = true }
 enumerate-windows = { workspace = true }
+log = { workspace = true }
 ngd3dcompile = { workspace = true }
 nkcore = { workspace = true, features = ["debug"] }
 pretty-name = { workspace = true }

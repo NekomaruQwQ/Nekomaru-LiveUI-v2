@@ -1,8 +1,9 @@
 //! `live-capture.exe` — standalone screen capture + H.264 encoding to stdout.
 //!
 //! Captures a window by HWND, encodes with NVENC, and writes binary IPC
-//! messages (see [`live_capture`]) to stdout.  All log output goes to stderr
-//! so stdout stays exclusively binary.
+//! messages (see [`live_capture`]) to stdout.  Encoder init diagnostics go to
+//! `live-capture.encoder.log` next to the exe; all other log output goes to
+//! stderr.  Stdout stays exclusively binary.
 //!
 //! Two exclusive capture modes:
 //! - **Resample**: scales the full window to `--width x --height` (letterboxed).
@@ -40,6 +41,7 @@ use nkcore::prelude::*;
 use nkcore::prelude::euclid::Size2D;
 
 use std::io::{BufWriter, Write as _};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -172,6 +174,51 @@ fn resolve_capture_mode(args: &CliArgs) -> anyhow::Result<Option<CaptureMode>> {
         "either --width/--height (resample) or --crop-min-x/y --crop-max-x/y (crop) is required");
 }
 
+// ── Logging ─────────────────────────────────────────────────────────────────
+
+/// Set up dual-output logging:
+/// - Encoder init diagnostics (info/debug/trace from `live_capture::encoder`)
+///   go to `live-capture.encoder.log` next to the executable, truncated on
+///   each run.  These are stable and verbose — useful for post-hoc inspection
+///   but noisy on stderr.
+/// - Warnings and errors from encoder code still go to stderr (real problems).
+/// - Everything else goes to stderr as usual.
+///
+/// `capture_mode` controls whether the encoder log file is created.  Utility
+/// modes (`--enumerate-windows`, `--foreground-window`) pass `false` to avoid
+/// truncating a log file that a concurrent capture process is writing to.
+fn init_logger(capture_mode: bool) {
+    // Only create (truncate) the encoder log file for actual capture runs.
+    // Utility invocations are frequent (selector polls every 2s) and would
+    // otherwise repeatedly truncate the file.
+    let encoder_log_file: Option<Mutex<std::fs::File>> = if capture_mode {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("live-capture.encoder.log")))
+            .and_then(|p| std::fs::File::create(p).ok())
+            .map(Mutex::new)
+    } else {
+        None
+    };
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(move |buf, record| {
+            let is_encoder = record.target().starts_with("live_capture::encoder");
+            // log::Level ordering: Error < Warn < Info < Debug < Trace.
+            // >= Info captures diagnostic messages; Warn/Error fall through to stderr.
+            let is_diagnostic = record.level() >= log::Level::Info;
+            if is_encoder && is_diagnostic {
+                if let Some(ref file) = encoder_log_file {
+                    let mut f = file.lock().unwrap();
+                    writeln!(f, "[{} {}] {}", record.level(), record.target(), record.args())?;
+                    return Ok(());
+                }
+            }
+            writeln!(buf, "[{} {}] {}", record.level(), record.target(), record.args())
+        })
+        .init();
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 fn main() {
@@ -181,9 +228,9 @@ fn main() {
     // SAFETY: Called once, before any window or geometry API usage.
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 
-    pretty_env_logger::init();
-
     let args = CliArgs::parse();
+    let is_capture_mode = !args.enumerate_windows && !args.foreground_window;
+    init_logger(is_capture_mode);
 
     if args.enumerate_windows {
         let windows = enumerate_windows::enumerate_windows();
