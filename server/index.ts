@@ -52,7 +52,12 @@ const honoServer =
 const viteServer =
     await vite.createServer({
         configFile: path.resolve(import.meta.dirname, "../frontend/vite.config.ts"),
-        server: { middlewareMode: true },
+        server: {
+            middlewareMode: true,
+            hmr: {
+                port: serverPort + 10000,
+            },
+        },
     });
 
 // ── HTTP server ──────────────────────────────────────────────────────────────
