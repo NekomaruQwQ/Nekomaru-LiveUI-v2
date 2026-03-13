@@ -60,8 +60,8 @@ export function StatusWidget({ strings }: { strings: Record<string, string> }) {
     } as const;
 
     const mode = (
-        strings.mode
-            && MODE_MAP[strings.mode as keyof typeof MODE_MAP])
+        strings.$liveMode
+            && MODE_MAP[strings.$liveMode as keyof typeof MODE_MAP])
             || MODE_MAP.unknown;
     const micOn = strings.microphone === "on";
 

@@ -2,8 +2,8 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Control Panel Rewritten (stream overview, auto-config editor, string store editor) | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | Control Panel CJK Font (Microsoft YaHei UI) | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | Structured Server Logging (Grouped Stderr, Panic Detection, Debug Level)
-**Last Updated**: 2026-03-11
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Control Panel Rewritten (stream overview, auto-config editor, string store editor) | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | Control Panel CJK Font (Microsoft YaHei UI) | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | Structured Server Logging (Grouped Stderr, Panic Detection, Debug Level) | SidePanel Widgets (Status, Capture, About) | Flat Preset Format (Merged Include/Exclude with @exclude) | $liveMode Computed String (Selector-Driven Mode Tags) | Path Separator Normalization (/ and \ interchangeable)
+**Last Updated**: 2026-03-12
 **Hardware**: RTX 5090 | Windows 11
 
 ---
@@ -369,29 +369,32 @@ The `generation` field increments each time the underlying capture process is re
 {
     "preset": "default",
     "presets": {
-        "default": {
-            "include": ["devenv.exe", "C:\\Program Files\\JetBrains\\", "D:\\7-Games\\"],
-            "exclude": ["gogh.exe", "vtube studio.exe"]
-        },
-        "gaming": {
-            "include": ["D:\\7-Games\\"],
-            "exclude": []
-        }
+        "default": [
+            "@code devenv.exe",
+            "@code C:\\Program Files\\JetBrains\\",
+            "@game D:\\7-Games\\",
+            "@exclude gogh.exe",
+            "@exclude vtube studio.exe"
+        ],
+        "gaming": [
+            "@game D:\\7-Games\\"
+        ]
     }
 }
 ```
 
-**`PUT /api/v1/streams/auto/config`** — Replace the full preset config. Each pattern is a string in the format `<exePath>@<windowTitle>`. If no `@` is present, only the executable path is matched. When both parts are given, both must match (AND). The title part is always compared case-insensitively. Exclude patterns also compare the exe path case-insensitively.
+**`PUT /api/v1/streams/auto/config`** — Replace the full preset config. Each preset is a flat `string[]` of pattern entries. Entries are include rules by default; `@exclude` prefix marks an exclusion rule. Include entries may carry an optional `@mode ` prefix (e.g. `@code devenv.exe`) that is pushed as the `$liveMode` computed string on capture switch. The full pattern format is `[@mode] <exePath>[@<windowTitle>]`. If no `@` separator is present in the body, only the executable path is matched. When both parts are given, both must match (AND). The title part is always compared case-insensitively. Exclude patterns also compare the exe path case-insensitively.
 
 ```json
 // Request body
 {
     "preset": "default",
     "presets": {
-        "default": {
-            "include": ["devenv.exe", "Code.exe@LiveUI"],
-            "exclude": ["gogh.exe"]
-        }
+        "default": [
+            "@code devenv.exe",
+            "@code Code.exe@LiveUI",
+            "@exclude gogh.exe"
+        ]
     }
 }
 
@@ -420,6 +423,9 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 | Key | Source | Description |
 |-----|--------|-------------|
 | `$captureWindowTitle` | Auto selector | Title of the window currently being captured on the "main" stream. Set at capture-switch time. |
+| `$captureMode` | Auto selector | Current capture mode — `"auto"` when the selector is active, absent when stopped. |
+| `$liveMode` | Auto selector | Live mode derived from the matched include pattern's `@mode` tag (e.g. `"code"`, `"sing"`). Absent when no mode tag on the matched pattern or selector stopped. |
+| `$timestamp` | Server startup | Revision timestamp of the `@-` jj revision, read via `jj log` at server boot. Displayed in the About widget. |
 
 **`GET /api/v1/strings`** — Get all key-value pairs (including computed strings).
 
@@ -496,14 +502,14 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/api/v1/*` → Hono, everything else → Vite. Auto-starts selector and YTM manager on boot. SIGINT/SIGTERM cleanup. |
+| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/api/v1/*` → Hono, everything else → Vite. Auto-starts selector and YTM manager on boot. Reads `jj log -r @-` timestamp and pushes `$timestamp` computed string. SIGINT/SIGTERM cleanup. |
 | **Stream API** | `server/api.ts` | Done | Hono sub-router mounted at `/api/v1/streams`. Routes: `GET/POST/DELETE /`, `GET/POST/DELETE /auto`, `GET/PUT /auto/config`, `PUT /auto/config/preset`, `GET /:id/init`, `GET /:id/frames?after=N`, `GET /windows`. POST accepts resample or crop mode (Zod union — crop uses absolute bounding box). `generation` field in list and frames responses. Frames endpoint returns binary (`application/octet-stream`) — no JSON/base64 overhead. |
 | **Logging** | `server/log.ts` | Done | Structured, color-coded logging for all server modules and forwarded Rust stderr. Three systems: (1) **Marker system** — `[moduleId]` and `[@streamId moduleId]` with cyan brackets, bold green stream IDs. (2) **Alignment** — per-level pad widths (`BASE_PAD_WIDTH` 18 for non-stream, +streamId length+2 for stream-scoped) so messages align within each nesting level. (3) **Rust stderr forwarding** — `writeCaptureGroup()` renders grouped env_logger lines: single-line inline with marker, multiline with marker alone + body indented +4. Panic detection (`PANIC_RE`) upgrades entire group to bold red. `isCaptureLogHead()` exported for group boundary detection. `Logger` interface: `info`, `warn`, `error`, `debug`. Debug level gated by `LIVEUI_DEBUG` env var (zero-cost no-op when unset). |
 | **Process Manager** | `server/process.ts` | Done | `CaptureStream` with `generation` counter. `spawnAndWire()` helper shared by create and replace paths. `createStream()`/`createCropStream()` for manual use (random IDs). `replaceStream()`/`replaceCropStream()` for well-known IDs — kills old process, resets buffer, bumps generation in-place (idempotent: creates if missing). Crop streams use absolute bounding box (minX/Y, maxX/Y). `pipeStderr()` groups Rust log lines using time-based flush (10ms delay) and head detection before forwarding to `writeCaptureGroup()`. |
 | **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
 | **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. `reset()` clears all state on stream replacement. |
 | **Constants** | `server/common.ts` | Done | Port (`LIVE_PORT` env or 3000), exe path, buffer capacity, data directory path. |
-| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Multi-preset config: named presets with include/exclude lists, switchable at runtime via `PUT /auto/config/preset`. Pattern format: `<exePath>@<windowTitle>` — exe-only patterns are backward-compatible; title part is always case-insensitive. Config persisted to `data/selector-config.json` — loaded on startup (supports legacy flat format), written on every change. Uses `replaceStream("main", ...)` — stream ID is always `"main"`, generation bumps on each switch. Pushes `$captureWindowTitle` computed string on capture switch. |
+| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Multi-preset config: each preset is a flat `string[]` — entries are include by default, `@exclude` marks exclusions. Pattern format: `[@mode] <exePath>[@<windowTitle>]` — `@mode` prefix (e.g. `@code`, `@game`) tags entries with a live mode pushed as `$liveMode` on capture switch. Path separators normalized (`/` and `\` interchangeable). Presets switchable at runtime via `PUT /auto/config/preset`. Config persisted to `data/selector-config.json` — loaded on startup (migrates legacy `{ include, exclude }` format), written on every change. Uses `replaceStream("main", ...)` — stream ID is always `"main"`, generation bumps on each switch. Pushes `$captureWindowTitle` and `$liveMode` on capture switch, `$captureMode` on start/stop. |
 | **YouTube Music Manager** | `server/youtube-music.ts` | Done | `YouTubeMusicManager` class. Polls `enumerateWindows()` every 5s, finds window by `"YouTube Music"` title prefix. Creates/replaces `"youtube-music"` crop stream (bottom 96px computed from window dimensions). Destroys stream when window disappears. |
 | **Persistence** | `server/persist.ts` | Done | Thin JSON file persistence utility. `loadJson(path, fallback)` / `saveJson(path, data)` using Bun APIs. Creates `data/` directory on module load. |
 | **String Store** | `server/strings.ts` | Done | `Map<string, string>` persisted to `data/strings.json`. Hono routes: `GET /` (all pairs, merged with computed strings), `PUT /:key` (set + save, rejects `$` prefix with 403), `DELETE /:key` (delete + save, rejects `$` prefix with 403). Separate `computedStore` map for server-derived readonly strings — producers push via `setComputed()`/`clearComputed()`. Loaded from disk on startup, falls back to empty. Exports `StringsApiType` for frontend RPC. Mounted at `/api/v1/strings` in `index.ts`. |
@@ -516,7 +522,8 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 | **Strings API Client** | `frontend/src/strings-api.ts` | Done | Typed Hono RPC client via `hc<StringsApiType>("/api/v1/strings")`. Same pattern as `api.ts`. |
 | **Stream Status** | `frontend/src/streams.ts` | Done | `useStreamStatus()` hook. Polls `GET /api/v1/streams` every 2s, returns `{ hasMain, hasYouTubeMusic }` booleans for UI visibility. |
 | **String Store Hook** | `frontend/src/strings.ts` | Done | `useStrings()` hook. Polls `GET /api/v1/strings` every 2s, returns `Record<string, string>` of all key-value pairs. |
-| **App** | `frontend/src/app.tsx` | Done | Pure viewer shell. JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. Displays server-managed strings by well-known ID (e.g. `"test"` in sidebar, `"marquee"` in scrolling top banner). No control buttons — all lifecycle is server-managed. |
+| **App** | `frontend/src/app.tsx` | Done | Pure viewer shell. JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. Displays server-managed strings by well-known ID (e.g. `"marquee"` in scrolling top banner, `"message"` in sidebar). SidePanel hosts Clock, Status (mode + mic), Capture, message area, and About widgets. No control buttons — all lifecycle is server-managed. |
+| **Widgets** | `frontend/src/widgets/index.tsx` | Done | All widgets in one file: `ClockWidget` (dual timezone), `StatusWidget` (`$liveMode` + microphone pair, small), `CaptureWidget` (capture mode + window title, large), `AboutWidget` (revision timestamp + credits, large). Shared `LiveWidget` base in `widgets/common.tsx`. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
 | **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` and `@shadcn` aliases. |
 
@@ -696,6 +703,9 @@ Nekomaru-LiveUI-v2/
     │   ├── app.tsx                  # Pure viewer shell (streams + server-managed strings by ID)
     │   ├── streams.ts               # useStreamStatus() hook (polls availability for UI visibility)
     │   ├── strings.ts               # useStrings() hook (polls /api/v1/strings every 2s)
+    │   ├── widgets/                 # SidePanel widgets
+    │   │   ├── common.tsx           # LiveWidget base component (icon + label + content layout)
+    │   │   └── index.tsx            # All widgets: Clock, Status, Capture, About
     │   └── stream/                  # Self-contained H.264 stream module
     │       ├── index.tsx            # <StreamRenderer> (generation-aware, owns decoder lifecycle)
     │       └── decoder.ts           # H264Decoder (WebCodecs + avcC + fetchInit, retries 404/503)

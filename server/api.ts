@@ -108,10 +108,7 @@ const api = new Hono()
     .put("/auto/config",
         zValidator("json", z.object({
             preset: z.string(),
-            presets: z.record(z.string(), z.object({
-                include: z.array(z.string()),
-                exclude: z.array(z.string()),
-            })),
+            presets: z.record(z.string(), z.array(z.string())),
         })),
         async (c) => {
             await selector.setConfig(c.req.valid("json"));

@@ -7,9 +7,13 @@
 // in-place (bumping its generation counter) instead of destroying and
 // recreating it.
 //
-// Each include/exclude entry is a pattern string in the format
-// `<exePath>@<windowTitle>`.  If no `@` is present, only the executable
-// path is matched (backward-compatible).  When both parts are given, both
+// Each preset is a flat `string[]` of pattern entries.  Entries are
+// include rules by default; `@exclude` prefix marks an exclusion rule.
+// Include entries may carry a `@mode` prefix (e.g. `@code devenv.exe`)
+// that is pushed as the `$liveMode` computed string on capture switch.
+// The full pattern format is `[@mode] <exePath>[@<windowTitle>]`.
+// If no `@` separator is present in the body, only the executable path
+// is matched (backward-compatible).  When both parts are given, both
 // must match (AND).  The title part is always compared case-insensitively.
 //
 // Include/exclude config is persisted to data/selector-config.json — loaded
@@ -36,22 +40,19 @@ const streamLog = createStreamLogger(STREAM_ID, MODULE);
 const DEFAULT_PRESET_NAME = "default";
 
 /// Default presets map.  Contains a single "default" preset with hardcoded patterns.
-const DEFAULT_PRESETS: Record<string, SelectorConfig> = {
-    [DEFAULT_PRESET_NAME]: {
-        include: [
-            "devenv.exe",
-            "C:\\Program Files\\Microsoft Visual Studio Code\\Code.exe",
-            "C:\\Program Files\\JetBrains\\",
-            "D:\\7-Games\\",
-            "D:\\7-Games.Steam\\steamapps\\common\\",
-            "E:\\Nekomaru.Games\\",
-            "E:\\SteamLibrary\\steamapps\\common\\",
-        ],
-        exclude: [
-            "gogh.exe",
-            "vtube studio.exe",
-        ],
-    },
+/// Entries are include by default; `@exclude` marks exclusion rules.
+const DEFAULT_PRESETS: Record<string, string[]> = {
+    [DEFAULT_PRESET_NAME]: [
+        "@code devenv.exe",
+        "@code C:/Program Files/Microsoft Visual Studio Code/Code.exe",
+        "@code C:/Program Files/JetBrains/",
+        "@game D:/7-Games/",
+        "@game D:/7-Games.Steam/steamapps/common/",
+        "@game E:/Nekomaru-Games/",
+        "@game E:/SteamLibrary/steamapps/common/",
+        "@exclude gogh.exe",
+        "@exclude vtube studio.exe",
+    ],
 };
 
 /// Persistence path for the include/exclude config.
@@ -81,16 +82,11 @@ export interface SelectorStatus {
     currentTitle: string | null;
 }
 
-export interface SelectorConfig {
-    include: string[];
-    exclude: string[];
-}
-
 /// Top-level config shape persisted to disk.  Contains a named active preset
-/// and a map of all available presets.
+/// and a map of all available presets (each preset is a flat pattern list).
 export interface PresetConfig {
     preset: string;
-    presets: Record<string, SelectorConfig>;
+    presets: Record<string, string[]>;
 }
 
 // ── Selector ─────────────────────────────────────────────────────────────────
@@ -113,7 +109,7 @@ class LiveWindowSelector {
 
     /// Active preset name and all available presets — editable at runtime via the API.
     private preset: string = DEFAULT_PRESET_NAME;
-    private presets: Record<string, SelectorConfig> = structuredClone(DEFAULT_PRESETS);
+    private presets: Record<string, string[]> = structuredClone(DEFAULT_PRESETS);
 
     get active(): boolean {
         return this.timer !== null;
@@ -140,6 +136,7 @@ class LiveWindowSelector {
         this.lastCaptureTitle = null;
         clearComputed("$captureWindowTitle");
         clearComputed("$captureMode");
+        clearComputed("$liveMode");
         log.info("stopped");
     }
 
@@ -174,12 +171,30 @@ class LiveWindowSelector {
 
     /// Load persisted config from disk, replacing the hardcoded defaults.
     /// Falls back silently to defaults if the file is missing or corrupt.
+    /// Migrates the legacy `{ include, exclude }` per-preset format to the
+    /// flat `string[]` format, prepending `@exclude` to former exclude entries.
     async loadPersistedConfig(): Promise<void> {
-        const saved = await loadJson<PresetConfig | null>(configPath, null);
+        const saved = await loadJson<any>(configPath, null);
         if (!saved || !saved.presets) return;
 
         this.preset = saved.preset ?? DEFAULT_PRESET_NAME;
-        this.presets = saved.presets;
+
+        // Migrate legacy format: { include: string[], exclude: string[] } → string[]
+        const presets: Record<string, string[]> = {};
+        for (const [name, value] of Object.entries(saved.presets)) {
+            if (Array.isArray(value)) {
+                presets[name] = value as string[];
+            } else if (value && typeof value === "object" && "include" in value) {
+                const legacy = value as { include: string[]; exclude: string[] };
+                presets[name] = [
+                    ...legacy.include,
+                    ...legacy.exclude.map((e: string) => `@exclude ${e}`),
+                ];
+                log.info(`migrated legacy preset "${name}" to flat format`);
+            }
+        }
+
+        this.presets = presets;
         log.info(`loaded config from disk: preset="${this.preset}", ${Object.keys(this.presets).length} preset(s)`);
     }
 
@@ -203,7 +218,8 @@ class LiveWindowSelector {
         // Log foreground change (title masked for privacy, same as original).
         log.info(`foreground: *** (${info.executable_path})`);
 
-        if (!this.shouldCapture(info.executable_path, info.title)) return;
+        const result = this.shouldCapture(info.executable_path, info.title);
+        if (!result) return;
 
         // Already capturing this window.
         if (hwndStr === this.lastCaptureHwnd) return;
@@ -215,66 +231,108 @@ class LiveWindowSelector {
         this.lastCaptureHwnd = hwndStr;
         this.lastCaptureTitle = info.title;
         setComputed("$captureWindowTitle", info.title);
+
+        // Push or clear the live mode based on the matched include pattern's @mode tag.
+        if (result.mode) {
+            setComputed("$liveMode", result.mode);
+        } else {
+            clearComputed("$liveMode");
+        }
+
         streamLog.info(`capturing ${hwndStr}`);
     }
 
-    /// Determines whether a window qualifies for capture based on its
-    /// executable path and title, using the active preset's pattern lists.
-    /// Each config entry may optionally contain a `@` separator:
-    /// `<exePath>@<windowTitle>`.  Must match at least one include entry
-    /// and must not match any exclude entry.
-    private shouldCapture(executablePath: string, title: string): boolean {
-        const active = this.preset ? this.presets[this.preset]: null;
-        if (!active) return false;
-        const included = active.include.some((pattern) =>
-            matchesPattern(pattern, executablePath, title, false));
-        const excluded = active.exclude.some((pattern) =>
-            matchesPattern(pattern, executablePath, title, true));
-        return included && !excluded;
+    /// Determines whether a window qualifies for capture based on the
+    /// active preset's pattern list.  Returns null if the window should
+    /// not be captured.  Otherwise returns the mode tag from the first
+    /// matching include entry (which may itself be null if the pattern
+    /// has no `@mode` prefix).  `@exclude` entries veto the match.
+    private shouldCapture(executablePath: string, title: string): { mode: string | null } | null {
+        const patterns = this.preset ? this.presets[this.preset] : null;
+        if (!patterns) return null;
+
+        // First matching include entry wins (determines the mode tag).
+        let matchedMode: string | null = null;
+        let included = false;
+
+        for (const raw of patterns) {
+            const parsed = parsePattern(raw);
+            if (parsed.mode === "exclude") {
+                // Exclude entries use case-insensitive exe-path matching.
+                if (matchesParsed(parsed, executablePath, title, true)) return null;
+            } else if (!included) {
+                if (matchesParsed(parsed, executablePath, title, false)) {
+                    included = true;
+                    matchedMode = parsed.mode;
+                }
+            }
+        }
+
+        return included ? { mode: matchedMode } : null;
     }
 }
 
 // ── Pattern matching ─────────────────────────────────────────────────────────
 
-/// A parsed config pattern with optional title filter.
+/// A parsed config pattern with optional mode tag and title filter.
 interface ParsedPattern {
+    /// Optional mode tag from a leading `@mode ` prefix (e.g. `@code devenv.exe`).
+    /// null when no mode prefix is present.
+    mode: string | null;
     exePath: string;
     /// null when no `@` separator is present (plain exe-path-only pattern).
     title: string | null;
 }
 
-/// Parse a config string in the format `<exePath>@<windowTitle>`.
-/// If no `@` is present, the entire string is the exe path and title is null.
-/// Splits on the *first* `@` so that window titles containing `@` are preserved.
+/// Parse a config string with optional `@mode ` prefix and `<exePath>@<windowTitle>` body.
+///
+/// A leading `@word<space>` is recognized as a mode tag only when the pattern
+/// starts with `@`, followed by a non-empty word, followed by a space.  This is
+/// unambiguous with the existing `@<windowTitle>` syntax (which has no space).
+///
+/// After stripping the mode prefix (if any), the remainder is split on the
+/// first `@` into exe-path and window-title parts.
 function parsePattern(pattern: string): ParsedPattern {
-    const idx = pattern.indexOf("@");
-    if (idx === -1) return { exePath: pattern, title: null };
-    return { exePath: pattern.slice(0, idx), title: pattern.slice(idx + 1) };
+    let mode: string | null = null;
+    let body = pattern;
+
+    // Extract leading `@mode ` prefix (distinguished from `@title` by the space).
+    if (body.startsWith("@")) {
+        const spaceIdx = body.indexOf(" ");
+        if (spaceIdx > 1) {
+            mode = body.slice(1, spaceIdx);
+            body = body.slice(spaceIdx + 1);
+        }
+    }
+
+    const idx = body.indexOf("@");
+    if (idx === -1) return { mode, exePath: body, title: null };
+    return { mode, exePath: body.slice(0, idx), title: body.slice(idx + 1) };
 }
 
-/// Test whether a window (exe path + title) matches a single config pattern.
+/// Test whether a window (exe path + title) matches a pre-parsed pattern.
 ///
 /// - `caseInsensitive` controls exe-path comparison; title comparison is
 ///   always case-insensitive regardless of this flag.
 /// - Both the exe-path part and the title part (when present and non-empty)
 ///   must match (AND semantics).
-function matchesPattern(
-    pattern: string,
+function matchesParsed(
+    parsed: ParsedPattern,
     executablePath: string,
     windowTitle: string,
     caseInsensitive: boolean): boolean {
-    const { exePath, title } = parsePattern(pattern);
-
     // Check exe-path part (skip if empty, e.g. "@SomeTitle").
-    if (exePath.length > 0) {
-        const haystack = caseInsensitive ? executablePath.toLowerCase() : executablePath;
-        const needle = caseInsensitive ? exePath.toLowerCase() : exePath;
+    // Normalize path separators so `/` and `\` are interchangeable.
+    if (parsed.exePath.length > 0) {
+        let haystack = executablePath.replaceAll("\\", "/");
+        let needle = parsed.exePath.replaceAll("\\", "/");
+        if (caseInsensitive) { haystack = haystack.toLowerCase(); needle = needle.toLowerCase(); }
         if (!haystack.includes(needle)) return false;
     }
 
     // Check title part (skip if absent or empty, e.g. "foo.exe" or "foo.exe@").
-    if (title !== null && title.length > 0) {
-        if (!windowTitle.toLowerCase().includes(title.toLowerCase())) return false;
+    if (parsed.title !== null && parsed.title.length > 0) {
+        if (!windowTitle.toLowerCase().includes(parsed.title.toLowerCase())) return false;
     }
 
     return true;
