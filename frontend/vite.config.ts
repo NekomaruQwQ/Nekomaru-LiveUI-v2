@@ -11,10 +11,7 @@ export default vite.defineConfig({
     ],
     resolve: {
         alias: {
-            "@":
-                path.resolve(__dirname, "src"),
-            "@shadcn":
-                path.resolve(__dirname, "3rdparty", "shadcn"),
+            "@": path.resolve(__dirname, "src"),
         },
     },
     server: {

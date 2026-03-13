@@ -71,9 +71,6 @@ global.tailwind.css                         human
 index.html                                  human
 index.tsx                                   human
 
-# frontend/3rdparty/shadcn/
-**/*                                        3rd-party
-
 # config files
 Cargo.toml                                  human
 core/live-app/Cargo.toml                    human
@@ -81,7 +78,6 @@ core/live-capture/Cargo.toml                human
 core/live-control/Cargo.toml                human
 crates/enumerate-windows/Cargo.toml         human
 frontend/biome.json                         human
-frontend/components.json                    human
 frontend/package.json                       human
 frontend/tsconfig.json                      human
 frontend/vite.config.ts                     human

@@ -4,7 +4,6 @@
 
         "paths": {
             "@/*": ["src/*"],
-            "@shadcn/*": ["3rdparty/shadcn/*"],
         },
 
         "target": "ESNext",

@@ -525,7 +525,7 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 | **App** | `frontend/src/app.tsx` | Done | Pure viewer shell. JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. Displays server-managed strings by well-known ID (e.g. `"marquee"` in scrolling top banner, `"message"` in sidebar). SidePanel hosts Clock, Status (mode + mic), Capture, message area, and About widgets. No control buttons — all lifecycle is server-managed. |
 | **Widgets** | `frontend/src/widgets/index.tsx` | Done | All widgets in one file: `ClockWidget` (dual timezone), `StatusWidget` (`$liveMode` + microphone pair, small), `CaptureWidget` (capture mode + window title, large), `AboutWidget` (revision timestamp + credits, large). Shared `LiveWidget` base in `widgets/common.tsx`. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
-| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` and `@shadcn` aliases. |
+| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` alias. |
 
 ---
 
@@ -690,12 +690,12 @@ Nekomaru-LiveUI-v2/
 └── frontend/                        # Frontend (React + Vite + Tailwind)
     ├── package.json
     ├── tsconfig.json
-    ├── vite.config.ts               # Vite root = ., aliases: @→src
+    ├── vite.config.ts               # Vite root = ., alias: @→src
     ���── biome.json                   # Biome formatter/linter config
     ├── index.html
     ├── index.tsx                    # Entry point (React 19 createRoot)
     ├── global.css                   # CSS vars, dark gradient background, layout
-    ├── global.tailwind.css          # Tailwind base config (shadcn theme vars)
+    ├── global.tailwind.css          # Tailwind base import
     ├── debug.ts                     # Debug flags
     ├── src/                         # Application source (aliased as @/)
     │   ├── api.ts                   # Hono RPC client (imports ApiType from server)
