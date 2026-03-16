@@ -12,7 +12,7 @@
 //! live-audio.exe --list-devices
 //! ```
 
-#![expect(clippy::multiple_unsafe_ops_per_block, reason = "generated code")]
+#![expect(clippy::multiple_unsafe_ops_per_block, reason = "Windows API calls")]
 
 use live_audio::*;
 
@@ -105,6 +105,8 @@ fn list_devices() {
 
 /// Return friendly names of all active audio capture devices.
 fn enumerate_capture_devices() -> Vec<String> {
+    // SAFETY: COM is initialized (`CoInitializeEx` in `main`). All COM objects
+    // are obtained from successful API calls and are valid for this scope.
     unsafe {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -130,24 +132,27 @@ fn enumerate_capture_devices() -> Vec<String> {
 
 /// Read the friendly name from a device's property store.
 fn get_device_friendly_name(device: &IMMDevice) -> Option<String> {
+    // SAFETY: `device` is a valid COM object (caller obtained it from a
+    // successful `Item` call). `pwszVal` is valid for the lifetime of the
+    // `prop` PROPVARIANT; the `VT_LPWSTR` check guards the union access.
     unsafe {
         let store = device.OpenPropertyStore(STGM_READ).ok()?;
         let prop = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
 
         // The friendly name is stored as a VT_LPWSTR PROPVARIANT.
         // Access the wide string pointer through the variant union.
-        if prop.Anonymous.Anonymous.vt == VT_LPWSTR {
+        (prop.Anonymous.Anonymous.vt == VT_LPWSTR).then(|| {
             let pwsz = prop.Anonymous.Anonymous.Anonymous.pwszVal;
             let wide = U16CStr::from_ptr_str(pwsz.0);
-            Some(wide.to_string_lossy())
-        } else {
-            None
-        }
+            wide.to_string_lossy()
+        })
     }
 }
 
 /// Find a capture device by friendly name (exact match).
 fn find_device_by_name(name: &str) -> Result<IMMDevice, String> {
+    // SAFETY: COM is initialized (`CoInitializeEx` in `main`). All COM objects
+    // are obtained from successful API calls and are valid for this scope.
     unsafe {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -161,10 +166,9 @@ fn find_device_by_name(name: &str) -> Result<IMMDevice, String> {
 
         for i in 0..count {
             let Ok(device) = collection.Item(i) else { continue };
-            if let Some(friendly) = get_device_friendly_name(&device) {
-                if friendly == name {
-                    return Ok(device);
-                }
+            if let Some(friendly) = get_device_friendly_name(&device)
+                && friendly == name {
+                return Ok(device);
             }
         }
 
@@ -179,6 +183,8 @@ fn run_capture(device_name: &str) -> Result<(), String> {
     let device = find_device_by_name(device_name)?;
     log::info!("found device: \"{device_name}\"");
 
+    // SAFETY: COM is initialized and `device` is a valid `IMMDevice` from
+    // `find_device_by_name`.
     unsafe { capture_loop(&device) }
 }
 
@@ -187,15 +193,23 @@ fn run_capture(device_name: &str) -> Result<(), String> {
 /// Reads audio from the device, re-chunks into fixed-size blocks, and writes
 /// `AudioFrame` messages to stdout.  Exits cleanly on broken pipe (server
 /// killed the process) or device error.
+///
+/// # Safety
+///
+/// - COM must be initialized on the calling thread via `CoInitializeEx`.
 unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
+    // SAFETY: `device` is a valid `IMMDevice` (caller guarantee).
     let audio_client: IAudioClient = unsafe { device
         .Activate(CLSCTX_ALL, None) }
         .map_err(|e| format!("failed to activate IAudioClient: {e}"))?;
 
     // Query the device's native mix format.
+    // SAFETY: `audio_client` is valid from the successful `Activate` above.
     let mix_format_ptr = unsafe { audio_client
         .GetMixFormat() }
         .map_err(|e| format!("GetMixFormat failed: {e}"))?;
+    // SAFETY: `mix_format_ptr` is non-null (API succeeded) and points to a
+    // valid `WAVEFORMATEX` allocated by COM.
     let mix_format = unsafe { &*mix_format_ptr };
 
     let sample_rate = mix_format.nSamplesPerSec;
@@ -205,6 +219,10 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
     // Determine if we need f32→s16 conversion.
     // WASAPI shared mode often provides f32le (wFormatTag == WAVE_FORMAT_IEEE_FLOAT
     // or WAVE_FORMAT_EXTENSIBLE with IEEE_FLOAT subformat).
+    //
+    // SAFETY: `mix_format` is from `GetMixFormat`. If the format tag is
+    // `WAVE_FORMAT_EXTENSIBLE`, WASAPI guarantees the allocation is at least
+    // `WAVEFORMATEXTENSIBLE`-sized.
     let is_float = unsafe { is_float_format(mix_format) };
 
     log::info!("device format: {sample_rate}Hz, {channels}ch, {native_bits}-bit{}",
@@ -218,6 +236,8 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
     // Initialize in shared mode with the device's native format.
     // Buffer duration: 20ms (200_000 × 100ns units) — 2× our chunk size for safety.
     let buffer_duration: i64 = 200_000; // 20ms in 100ns units
+    // SAFETY: `audio_client` is valid; `mix_format_ptr` is the device's own
+    // native format — shared-mode init is guaranteed to accept it.
     unsafe { audio_client
         .Initialize(
             AUDCLNT_SHAREMODE_SHARED,
@@ -228,6 +248,7 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
             None) }
         .map_err(|e| format!("IAudioClient::Initialize failed: {e}"))?;
 
+    // SAFETY: `audio_client` is initialized (`Initialize` succeeded above).
     let capture_client: IAudioCaptureClient = unsafe { audio_client
         .GetService() }
         .map_err(|e| format!("failed to get IAudioCaptureClient: {e}"))?;
@@ -252,6 +273,7 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
         {chunk_samples} samples/chunk ({CHUNK_DURATION_MS}ms)");
 
     // Start the audio capture stream.
+    // SAFETY: `audio_client` is initialized and not yet started.
     unsafe { audio_client.Start() }
         .map_err(|e| format!("IAudioClient::Start failed: {e}"))?;
 
@@ -264,6 +286,8 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
 
     loop {
         // Read all available frames from WASAPI.
+        // SAFETY: `capture_client` is valid and started. `input_frame_bytes`,
+        // `channels`, and `is_float` all match the device's native format.
         let frames_read = unsafe { drain_wasapi_buffer(
             &capture_client, &mut accum,
             input_frame_bytes, channels as usize, is_float) }?;
@@ -302,6 +326,13 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
 ///
 /// Handles f32→s16le conversion if `is_float` is true.  Returns the total
 /// number of sample frames read (0 if the buffer was empty).
+///
+/// # Safety
+///
+/// - `capture_client` must be a valid, started `IAudioCaptureClient`.
+/// - `input_frame_bytes` must equal the device's native frame size in bytes
+///   (channels × bytes_per_sample).
+/// - `channels` and `is_float` must match the device's actual audio format.
 unsafe fn drain_wasapi_buffer(
     capture_client: &IAudioCaptureClient,
     accum: &mut Vec<u8>,
@@ -316,20 +347,26 @@ unsafe fn drain_wasapi_buffer(
         let mut frames_available = 0u32;
         let mut flags = 0u32;
 
+        // SAFETY: `capture_client` is valid (caller guarantee). Out-params
+        // are stack-local; `GetBuffer` writes into them on success.
         let hr = unsafe { capture_client.GetBuffer(
-            &mut buffer_ptr,
-            &mut frames_available,
-            &mut flags,
+            &raw mut buffer_ptr,
+            &raw mut frames_available,
+            &raw mut flags,
             None,
             None) };
 
         if hr.is_err() || frames_available == 0 {
             if frames_available > 0 {
+                // SAFETY: `frames_available` matches the count from `GetBuffer`.
                 let _ = unsafe { capture_client.ReleaseBuffer(frames_available) };
             }
             break;
         }
 
+        // SAFETY: `buffer_ptr` was returned by a successful `GetBuffer` and
+        // points to `frames_available * input_frame_bytes` contiguous bytes
+        // per the WASAPI contract. The slice is not used after `ReleaseBuffer`.
         let data = unsafe { std::slice::from_raw_parts(
             buffer_ptr, frames_available as usize * input_frame_bytes) };
 
@@ -357,6 +394,8 @@ unsafe fn drain_wasapi_buffer(
             }
         }
 
+        // SAFETY: `frames_available` matches the count from `GetBuffer`;
+        // the buffer data has been fully consumed above.
         unsafe { capture_client.ReleaseBuffer(frames_available) }
             .map_err(|e| format!("ReleaseBuffer failed: {e}"))?;
 
@@ -379,10 +418,9 @@ fn convert_f32_to_s16(input: &[u8], output: &mut Vec<u8>, num_samples: usize) {
             input[offset + 3],
         ]);
 
-        let clamped = sample_f32.clamp(-1.0, 1.0);
-        let sample_i16 = (clamped * 32767.0) as i16;
+        let scaled = (sample_f32.clamp(-1.0, 1.0) * 32767.0) as i16;
 
-        output.extend_from_slice(&sample_i16.to_le_bytes());
+        output.extend_from_slice(&scaled.to_le_bytes());
     }
 }
 
@@ -392,6 +430,12 @@ fn convert_f32_to_s16(input: &[u8], output: &mut Vec<u8>, num_samples: usize) {
 ///
 /// Handles both plain `WAVE_FORMAT_IEEE_FLOAT` and `WAVE_FORMAT_EXTENSIBLE`
 /// with an IEEE float subformat GUID.
+///
+/// # Safety
+///
+/// - If `fmt.wFormatTag == WAVE_FORMAT_EXTENSIBLE`, `fmt` must point to a
+///   `WAVEFORMATEXTENSIBLE`-sized allocation (i.e., the pointer must have
+///   come from an API like `GetMixFormat` that guarantees this).
 unsafe fn is_float_format(fmt: &WAVEFORMATEX) -> bool {
     if fmt.wFormatTag == WAVE_FORMAT_IEEE_FLOAT as u16 {
         return true;
@@ -400,8 +444,12 @@ unsafe fn is_float_format(fmt: &WAVEFORMATEX) -> bool {
     if fmt.wFormatTag == WAVE_FORMAT_EXTENSIBLE {
         // WAVEFORMATEXTENSIBLE is packed — copy SubFormat to avoid
         // a misaligned reference to the GUID field.
+        //
+        // SAFETY: The caller guarantees the allocation is
+        // `WAVEFORMATEXTENSIBLE`-sized when the tag is extensible.
+        // `read_unaligned` handles the potentially misaligned `SubFormat`.
         let sub_format = unsafe {
-            let ext = &*(fmt as *const WAVEFORMATEX as *const WAVEFORMATEXTENSIBLE);
+            let ext = &*std::ptr::from_ref::<WAVEFORMATEX>(fmt).cast::<WAVEFORMATEXTENSIBLE>();
             std::ptr::read_unaligned(std::ptr::addr_of!(ext.SubFormat))
         };
         return sub_format == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;

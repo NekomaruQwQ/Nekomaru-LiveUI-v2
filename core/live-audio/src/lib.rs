@@ -174,7 +174,8 @@ fn read_audio_frame_payload(data: &[u8]) -> io::Result<AudioFrame> {
         Err(io::Error::new(io::ErrorKind::InvalidData, "truncated AudioFrame payload"))?;
     }
 
-    let timestamp_us = u64::from_le_bytes(data[0..8].try_into().unwrap());
+    let timestamp_us = u64::from_le_bytes(
+        data[0..8].try_into().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?);
     let pcm_data = data[8..].to_vec();
 
     Ok(AudioFrame { timestamp_us, pcm_data })
