@@ -23,7 +23,9 @@ import { createLogger } from "./log";
 import { destroyAll } from "./process";
 import { selector } from "./selector";
 import { ytmManager } from "./youtube-music";
+import { audioManager } from "./audio";
 import api from "./api";
+import audioApi from "./audio-api";
 import stringsApi, { reloadStore, setComputed } from "./strings";
 
 const log = createLogger("server::server");
@@ -33,6 +35,7 @@ const log = createLogger("server::server");
 const honoApp =
     new Hono()
         .route("/api/v1/streams", api)
+        .route("/api/v1/audio", audioApi)
         .route("/api/v1/strings", stringsApi)
 
         /// Reload selector config and string store from disk.
@@ -79,6 +82,7 @@ httpServer.listen(serverPort, async () => {
     // connects.
     selector.start();
     ytmManager.start();
+    audioManager.start();
 
     // Push the parent revision's timestamp as a computed string for the
     // About widget.  Falls back silently if jj is unavailable.
@@ -94,11 +98,12 @@ httpServer.listen(serverPort, async () => {
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────────────────
-// Stop both managers and kill all child processes when the server shuts down.
+// Stop all managers and kill all child processes when the server shuts down.
 
 process.on("SIGINT", () => {
     selector.stop();
     ytmManager.stop();
+    audioManager.stop();
     destroyAll();
     process.exit(0);
 });
@@ -106,6 +111,7 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
     selector.stop();
     ytmManager.stop();
+    audioManager.stop();
     destroyAll();
     process.exit(0);
 });

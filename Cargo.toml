@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "core/live-app",
+    "core/live-audio",
     "core/live-capture",
     "crates/enumerate-windows",
 ]
@@ -54,13 +55,18 @@ windows = { version = "0.62.2", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
+    "Win32_Media_Multimedia",
     "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_System_WinRT_Direct3D11",
     "Win32_UI_HiDpi",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ]}
 

@@ -17,5 +17,12 @@ export const baseUrl = `http://localhost:${serverPort}`;
 export const captureExePath =
     path.resolve(import.meta.dirname, "../target/debug/live-capture.app.exe");
 
+/// Path to the live-audio.exe binary.
+export const audioExePath =
+    path.resolve(import.meta.dirname, "../target/debug/live-audio.app.exe");
+
+/// WASAPI capture device name passed to live-audio.exe via --device.
+export const audioDeviceName = "Loopback L + R (Focusrite USB Audio)";
+
 /// Number of frames to buffer per stream (~1 second at 60fps).
 export const frameBufferCapacity = 60;

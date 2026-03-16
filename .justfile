@@ -13,19 +13,20 @@ capture name:
 
 server:
     use .mod.nu run; \
-    run live-capture app --help
+        run live-capture app --help; \
+        run live-audio app --help;
     cd server; bun --hot index.ts;
 
 app *args:
     use .mod.nu run; \
-    run live-app app -x 1280 -y 720 {{args}}
+        run live-app app -x 1280 -y 720 {{args}}
 youtube-music *args:
     use .mod.nu run; \
-    run live-app youtube-music \
-        "https://music.youtube.com/" \
-        -t "YouTube Music" \
-        -x 1280 -y 720 -s 2 \
-        {{args}}
+        run live-app youtube-music \
+            "https://music.youtube.com/" \
+            -t "YouTube Music" \
+            -x 1280 -y 720 -s 2 \
+            {{args}}
 
 install: install-frontend install-server
 install-frontend:

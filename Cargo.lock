@@ -1112,6 +1112,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "live-audio"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "env_logger 0.11.9",
+ "log",
+ "widestring",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "live-capture"
 version = "0.1.0"
 dependencies = [

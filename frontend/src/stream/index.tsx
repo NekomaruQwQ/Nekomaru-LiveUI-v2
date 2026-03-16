@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { DEBUG } from "../../debug";
+import { avSync } from "../audio/sync";
 import { api } from "../api";
 import { ChromaKeyRenderer, parseHexColor } from "./chroma-key";
 import { H264Decoder, parseStreamFrame } from "./decoder";
@@ -61,6 +62,14 @@ export function StreamRenderer({ streamId, chromaKey, pollMs = 16 }: {
         }
 
         console.log("StreamRenderer: Canvas ready: %dx%d", canvas.width, canvas.height);
+
+        // Wrap onFrame to report video timestamps for A/V sync.
+        // The timestamp is a wall-clock value in microseconds from the capture process.
+        const originalOnFrame = onFrame;
+        onFrame = (frame) => {
+            if (frame.timestamp != null) avSync.reportVideoTimestamp(BigInt(frame.timestamp));
+            originalOnFrame(frame);
+        };
 
         const abortController = new AbortController();
         startStreamLoop(streamId, onFrame, abortController.signal, pollMs);
