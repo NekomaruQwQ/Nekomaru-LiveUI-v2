@@ -76,11 +76,12 @@ Three layers, mirroring the video pipeline:
 2. Queries the device's native mix format via `GetMixFormat()`
 3. If the device provides f32le (common for WASAPI shared mode), converts to s16le in-process
 4. Writes one `AudioParams` message to stdout (sample rate, channels, bit depth)
-5. Enters the capture loop:
+5. Registers with MMCSS (`AvSetMmThreadCharacteristicsW("Pro Audio")`) for guaranteed scheduling under heavy CPU load
+6. Enters the capture loop:
    - Polls `IAudioCaptureClient::GetBuffer()` every ~5ms
    - Accumulates samples into fixed-size 10ms chunks (480 samples at 48kHz)
    - Writes each chunk as an `AudioFrame` message with a wall-clock timestamp
-6. Exits cleanly on stdout broken pipe (server killed the process)
+7. Exits cleanly on stdout broken pipe (server killed the process; reverts MMCSS)
 
 ### 2. Server (`AudioManager`)
 
@@ -247,7 +248,7 @@ live-audio.exe --list-devices
 |------|---------|
 | `Cargo.toml` | Crate manifest (deps: windows, clap, env_logger, log, widestring) |
 | `src/lib.rs` | IPC wire protocol: message types, serialization, deserialization, tests |
-| `src/main.rs` | WASAPI capture loop: device enumeration, format detection, f32→s16 conversion, chunking |
+| `src/main.rs` | WASAPI capture loop: device enumeration, format detection, f32→s16 conversion, chunking, MMCSS thread priority |
 
 ### Server (`server/`)
 
@@ -296,7 +297,7 @@ to the total bandwidth.
 
 | Stage | Latency |
 |-------|---------|
-| WASAPI buffer fill | 10ms (one chunk) |
+| WASAPI buffer fill | 10–40ms (buffer sized for scheduling headroom) |
 | WASAPI poll interval | 0–5ms |
 | IPC (stdout pipe) | <1ms |
 | Server buffer | 0ms (immediate push) |

@@ -26,6 +26,7 @@ use windows::Win32::Devices::FunctionDiscovery::*;
 use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::Multimedia::*;
 use windows::Win32::System::Com::*;
+use windows::Win32::System::Threading::*;
 use windows::Win32::System::Variant::*;
 
 /// `WAVE_FORMAT_EXTENSIBLE` (0xFFFE) — indicates a WAVEFORMATEXTENSIBLE
@@ -234,8 +235,10 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
     }
 
     // Initialize in shared mode with the device's native format.
-    // Buffer duration: 20ms (200_000 × 100ns units) — 2× our chunk size for safety.
-    let buffer_duration: i64 = 200_000; // 20ms in 100ns units
+    // Buffer duration: 40ms (400_000 × 100ns units) — 4× our chunk size.  Extra
+    // headroom absorbs scheduling jitter under heavy CPU load (e.g. rustc on all
+    // cores) that even MMCSS can't fully eliminate.
+    let buffer_duration: i64 = 400_000; // 40ms in 100ns units
     // SAFETY: `audio_client` is valid; `mix_format_ptr` is the device's own
     // native format — shared-mode init is guaranteed to accept it.
     unsafe { audio_client
@@ -277,6 +280,25 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
     unsafe { audio_client.Start() }
         .map_err(|e| format!("IAudioClient::Start failed: {e}"))?;
 
+    // Register with MMCSS so the scheduler guarantees this thread CPU time
+    // even under heavy load (e.g. rustc compiling on all cores).  Without
+    // this, the 5ms poll sleep can stretch to 20-50ms+, overflowing the
+    // WASAPI buffer and permanently losing audio samples.
+    //
+    // SAFETY: No preconditions — `AvSetMmThreadCharacteristicsW` is safe to
+    // call on any thread.  The returned handle is saved for cleanup.
+    let mmcss_handle = unsafe {
+        let mut task_index = 0u32;
+        AvSetMmThreadCharacteristicsW(
+            windows::core::w!("Pro Audio"),
+            &raw mut task_index)
+    };
+    if mmcss_handle.is_err() {
+        log::warn!("MMCSS registration failed — audio may be choppy under CPU load");
+    } else {
+        log::info!("MMCSS: registered as \"Pro Audio\"");
+    }
+
     // Accumulation buffer for re-chunking WASAPI's variable-size buffers
     // into fixed-size chunks.
     let mut accum: Vec<u8> = Vec::with_capacity(chunk_bytes * 2);
@@ -309,6 +331,11 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
                 // Broken pipe means the server killed us — exit cleanly.
                 if e.kind() == std::io::ErrorKind::BrokenPipe {
                     log::info!("stdout closed, exiting");
+                    if let Ok(handle) = mmcss_handle {
+                        // SAFETY: `handle` is a valid MMCSS handle from
+                        // `AvSetMmThreadCharacteristicsW` above.
+                        unsafe { let _ = AvRevertMmThreadCharacteristics(handle); }
+                    }
                     return Ok(());
                 }
                 return Err(format!("failed to write AudioFrame: {e}"));
