@@ -27,12 +27,8 @@ rev = "8e9853c8"
 [workspace.dependencies]
 enumerate-windows = { path = "crates/enumerate-windows" }
 
-# bytemuck = { version = "1.24.0", features = ["derive", "const_zeroed"] }
-# glam = { version = "0.30.9", features = ["approx", "bytemuck", "glam-assert"] }
-# cfg-if = "1.0.4"
-
 base64 = "0.22"    # Base64 encoding for SPS/PPS in protocol handler
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 crossbeam = "0.8"  # Lock-free queue for stream manager
 env_logger = "0.11"
 log = "0.4.29"
@@ -44,31 +40,7 @@ tap = "1.0.1"
 widestring = "1.2.1"
 
 # LOCK: wry@0.54.2 depends on windows@^0.61
-windows = { version = "0.62.2", features = [
-    "Graphics_Capture",
-    "Graphics_DirectX",
-    "Graphics_DirectX_Direct3D11",
-    "UI",
-    "Win32_Foundation",
-    "Win32_Graphics_Direct3D",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Gdi",
-    "Win32_Devices_FunctionDiscovery",
-    "Win32_Media_Audio",
-    "Win32_Media_MediaFoundation",
-    "Win32_Media_Multimedia",
-    "Win32_System_Com",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_Ole",
-    "Win32_System_Threading",
-    "Win32_System_Variant",
-    "Win32_System_WinRT_Direct3D11",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Shell_PropertiesSystem",
-    "Win32_UI_WindowsAndMessaging",
-]}
+windows = "0.62.2"
 
 [workspace.dependencies.egui]
 version = "0.33.3"
@@ -81,7 +53,7 @@ default-features = false
 features = ["default_fonts", "glow"]
 
 [workspace.dependencies.reqwest]
-version = "0.12.28"
+version = "0.13.2"
 default-features = false
 features = ["blocking", "json", "rustls-tls"]
 
@@ -91,7 +63,7 @@ default-features = false
 features = ["rwh_06"]
 
 [workspace.dependencies.wry]
-version = "0.54.2"
+version = "0.54.3"
 default-features = false
 features = ["devtools", "protocol"]
 
