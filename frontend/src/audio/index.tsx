@@ -73,7 +73,10 @@ async function startAudioLoop(signal: AbortSignal): Promise<void> {
     }
 
     try {
-        // Load the worklet module.  Vite serves it from the source tree.
+        // Load the worklet module.  Vite resolves `new URL(..., import.meta.url)`
+        // to the correct asset path in both dev and production.
+        // IMPORTANT: worklet.ts must remain self-contained (no imports) —
+        // AudioWorklet scripts run outside the module system.
         await ctx.audioWorklet.addModule(new URL("./worklet.ts", import.meta.url));
     } catch (e) {
         console.error("AudioStream: Failed to load worklet module:", e);

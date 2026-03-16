@@ -54,7 +54,7 @@ pub struct AudioParams {
 pub struct AudioFrame {
     /// Wall-clock timestamp in microseconds since Unix epoch.
     /// Uses `SystemTime::now().duration_since(UNIX_EPOCH)` — same clock as
-    /// `live-capture`'s video frame timestamps, enabling frontend A/V sync.
+    /// `live-capture`'s video frame timestamps.
     pub timestamp_us: u64,
     /// Raw interleaved PCM samples (s16le, `channels` interleaved).
     pub pcm_data: Vec<u8>,

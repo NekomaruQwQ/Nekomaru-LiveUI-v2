@@ -63,6 +63,7 @@ class AudioManager {
         proc.exited.then((code) => {
             log.info(`process exited with code ${code}`);
             this.process = null;
+            this.buffer.reset();  // Clear stale state for clean restart.
         });
 
         log.info("started");

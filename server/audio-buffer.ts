@@ -70,7 +70,14 @@ export class AudioBuffer {
     }
 
     /// Return all buffered chunks with sequence > afterSequence.
+    /// If afterSequence exceeds the buffer's max sequence (e.g. after a
+    /// process restart reset the counter), returns all buffered chunks.
     getChunksAfter(afterSequence: number): BufferedChunk[] {
+        // If the caller's cursor is ahead of our newest chunk, they're from
+        // a previous generation — reset by returning everything we have.
+        const maxSeq = this.nextSequence - 1;
+        if (afterSequence > maxSeq) afterSequence = 0;
+
         const result: BufferedChunk[] = [];
 
         const start = this.writeIndex - this.count;

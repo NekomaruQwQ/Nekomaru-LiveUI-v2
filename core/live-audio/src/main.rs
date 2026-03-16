@@ -356,12 +356,16 @@ unsafe fn drain_wasapi_buffer(
             None,
             None) };
 
-        if hr.is_err() || frames_available == 0 {
-            if frames_available > 0 {
-                // SAFETY: `frames_available` matches the count from `GetBuffer`.
-                let _ = unsafe { capture_client.ReleaseBuffer(frames_available) };
-            }
+        // Normal "no data available" — break out of the drain loop.
+        if frames_available == 0 {
             break;
+        }
+
+        // GetBuffer genuinely failed (device disconnect, internal error).
+        // Log and propagate — the outer capture_loop will exit.
+        if let Err(e) = hr {
+            log::warn!("GetBuffer failed: {e}");
+            Err(format!("GetBuffer failed: {e}"))?;
         }
 
         // SAFETY: `buffer_ptr` was returned by a successful `GetBuffer` and
