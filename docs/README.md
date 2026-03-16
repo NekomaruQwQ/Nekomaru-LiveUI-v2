@@ -2,7 +2,7 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Control Panel Rewritten (stream overview, auto-config editor, string store editor) | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | Control Panel CJK Font (Microsoft YaHei UI) | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | Structured Server Logging (Grouped Stderr, Panic Detection, Debug Level) | SidePanel Widgets (Status, Capture, About) | Flat Preset Format (Merged Include/Exclude with @exclude) | $liveMode Computed String (Selector-Driven Mode Tags) | Path Separator Normalization (/ and \ interchangeable) | Strict JSON Persistence (Crash on Corrupt Config) | Justfile Recipes (refresh, capture)
+**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Control Panel Rewritten (stream overview, auto-config editor, string store editor) | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | Control Panel CJK Font (Microsoft YaHei UI) | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | Structured Server Logging (Grouped Stderr, Panic Detection, Debug Level) | SidePanel Widgets (Status, Capture, About) | Flat Preset Format (Merged Include/Exclude with @exclude) | $liveMode Computed String (Selector-Driven Mode Tags) | Path Separator Normalization (/ and \ interchangeable) | Strict JSON Persistence (Crash on Corrupt Config) | Justfile Recipes (refresh, capture) | Audio Streaming (WASAPI Capture, Server Pipeline, Browser Playback)
 **Last Updated**: 2026-03-16
 **Hardware**: RTX 5090 | Windows 11
 
@@ -55,7 +55,7 @@ curl -X POST http://localhost:3000/api/v1/streams \
 
 ### Multi-Executable Design
 
-The project is split into four independently running components. The hard work (GPU capture + hardware encoding) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
+The project is split into five independently running components. The hard work (GPU capture + hardware encoding + audio capture) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -79,6 +79,23 @@ The project is split into four independently running components. The hard work (
                      │ stdout (binary wire protocol)
                      ↓
 ┌─────────────────────────────────────────────────────────────────┐
+│ live-audio.exe  (Rust)                                           │
+│                                                                  │
+│  Single instance for system audio.                               │
+│  Spawned by LiveServer as a child process.                       │
+│                                                                  │
+│  WASAPI shared-mode capture (named device)                       │
+│    ↓                                                             │
+│  f32 → s16le conversion (if float format)                        │
+│    ↓                                                             │
+│  Re-chunk to fixed 10ms blocks                                   │
+│    ↓                                                             │
+│  Binary audio messages → stdout                                  │
+└────────────────────┬────────────────────────────────────────────┘
+                     │
+                     │ stdout (binary audio protocol)
+                     ↓
+┌─────────────────────────────────────────────────────────────────┐
 │ LiveServer  (TypeScript, Hono on Bun)                            │
 │                                                                  │
 │  Process Manager                                                 │
@@ -86,6 +103,11 @@ The project is split into four independently running components. The hard work (
 │    - Reads their stdout, parses binary frames                    │
 │    - Well-known stream IDs: "main" + "youtube-music"             │
 │    - Generation counter per stream (bumps on replace)            │
+│                                                                  │
+│  Audio Manager                                                   │
+│    - Spawns / kills live-audio.exe (single instance)             │
+│    - Reads stdout, parses binary audio chunks                    │
+│    - Circular audio buffer (~100 chunks, ~1 second)              │
 │                                                                  │
 │  Stream Buffer (per capture)                                     │
 │    - Circular buffer (~60 frames, ~1 second)                     │
@@ -112,6 +134,8 @@ The project is split into four independently running components. The hard work (
 │    - /streams/:id/init    → codec params (SPS, PPS, resolution)  │
 │    - /streams/:id/frames  → encoded frames + generation (poll)   │
 │    - /strings             → get / set / delete strings           │
+│    - /audio/init          → audio format params (sample rate, ch)│
+│    - /audio/chunks        → PCM audio chunks (poll)              │
 │                                                                  │
 │  Frontend Server                                                 │
 │    - Proxies to Vite dev server (development)                    │
@@ -134,6 +158,8 @@ The project is split into four independently running components. The hard work (
 │    - Hardcoded stream IDs: "main" + "youtube-music"              │
 │    - Polls /api/v1/strings for dynamic text display by well-known ID │
 │    - Multiple viewers can connect to the same stream             │
+│    - AudioStream: polls PCM chunks, plays via AudioWorklet       │
+│    - No A/V sync — both clocks are wall-clock, ~20ms delta       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,6 +168,7 @@ The project is split into four independently running components. The hard work (
 | Concern | Decision | Rationale |
 |---------|----------|-----------|
 | GPU capture + encoding | Rust (`live-capture`) | Requires `unsafe` Windows APIs, hardware access, zero-copy GPU pipelines. No alternative. |
+| Audio capture | Rust (`live-audio`) | WASAPI requires COM + `unsafe`. Same child-process-to-stdout model as video capture. |
 | HTTP server + stream management | TypeScript (Hono on Bun) | Pure I/O multiplexing — shuttles bytes from child processes to HTTP clients. Dev velocity (hot reload) matters far more than soundness here. |
 | Control panel | Rust (`live-control`, optional) | Native egui/eframe GUI for managing captures. Talks to LiveServer via blocking HTTP. |
 | Webview host | Rust (`live-app`, optional) | Tiny wry wrapper for aspect-ratio-locked window. Could also just use a browser. |
@@ -483,6 +510,20 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 | **Decoder** | `frontend/src/stream/decoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor. `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). |
 | **Renderer** | `frontend/src/stream/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Owns full decoder lifecycle via `startStreamLoop()`. 404 treated as retriable. Parses binary frame responses directly (`parseBinaryFrameResponse()` — zero-copy `subarray` slices). |
 
+### Completed (`live-audio` crate — `core/live-audio/`)
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| **IPC Protocol (lib)** | `core/live-audio/src/lib.rs` | Done | Wire protocol types (`AudioParams`, `AudioFrame`) + serialization. Message types: `0x10` AudioParams (sample rate, channels, bits), `0x11` AudioFrame (timestamp + PCM), `0xFF` Error. |
+| **CLI + Capture Loop** | `core/live-audio/src/main.rs` | Done | WASAPI shared-mode capture. `--device` name-matched lookup, `--list-devices` enumeration mode. Captures at device native rate, outputs fixed 10ms s16le chunks. f32→s16 conversion with clamping. 5ms poll sleep, 20ms WASAPI buffer. Broken pipe → clean exit. |
+
+### Completed (Frontend Audio Module — `frontend/src/audio/`)
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| **Audio Stream** | `frontend/src/audio/index.tsx` | Done | Invisible `<AudioStream>` component. Polls `/api/v1/audio/chunks?after=N` with adaptive timing (16ms normal, 4ms fast retry). Posts PCM chunks to worklet immediately — no A/V sync. Handles browser autoplay policy. |
+| **PCM Worklet** | `frontend/src/audio/worklet.ts` | Done | AudioWorklet processor with ring buffer (9600 frames = 200ms at 48kHz). Receives s16le via MessagePort, converts to f32, outputs at audio callback rate. Silence on underrun. |
+
 ### Completed (Control Panel — `core/live-control/`)
 
 | Component | File | Status | Notes |
@@ -513,6 +554,10 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 | **YouTube Music Manager** | `server/youtube-music.ts` | Done | `YouTubeMusicManager` class. Polls `enumerateWindows()` every 5s, finds window by `"YouTube Music"` title prefix. Creates/replaces `"youtube-music"` crop stream (bottom 96px computed from window dimensions). Destroys stream when window disappears. |
 | **Persistence** | `server/persist.ts` | Done | Thin JSON file persistence utility. `loadJson(path, fallback)` / `saveJson(path, data)` using Bun APIs. Creates `data/` directory on module load. Strict mode: missing files return fallback silently (first run), but corrupt/malformed JSON crashes the server instead of silently degrading. |
 | **String Store** | `server/strings.ts` | Done | `Map<string, string>` persisted to `data/strings.json`. Hono routes: `GET /` (all pairs, merged with computed strings), `PUT /:key` (set + save, rejects `$` prefix with 403), `DELETE /:key` (delete + save, rejects `$` prefix with 403). Separate `computedStore` map for server-derived readonly strings — producers push via `setComputed()`/`clearComputed()`. Loaded from disk on startup, falls back to empty. Exports `StringsApiType` for frontend RPC. Mounted at `/api/v1/strings` in `index.ts`. |
+| **Audio Manager** | `server/audio.ts` | Done | `AudioManager` class. Spawns `live-audio.exe` with device name, reads stdout via `AudioProtocolParser`, pipes stderr through grouped log forwarding. Single global audio source (not per-stream). |
+| **Audio Protocol** | `server/audio-protocol.ts` | Done | Push-based incremental binary parser for audio IPC messages (`AudioParams`, `AudioFrame`, `Error`). Same pattern as video `protocol.ts`. |
+| **Audio Buffer** | `server/audio-buffer.ts` | Done | Circular chunk buffer (100 chunks = ~1s). Pre-serializes payloads on push. `getChunksAfter(seq)` for polling. `reset()` on process restart. |
+| **Audio API** | `server/audio-api.ts` | Done | Hono routes: `GET /api/v1/audio/init` (format params, 503 if not ready), `GET /api/v1/audio/chunks?after=N` (binary PCM chunks). |
 
 ### Completed (Frontend — React + Hono RPC)
 
@@ -642,6 +687,12 @@ Nekomaru-LiveUI-v2/
 │   │   └── src/
 │   │       └── main.rs              # Non-resizable 1280x800 wry webview, CLI args for URL/title/scaling
 │   │
+│   ├── live-audio/                  # live-audio.exe + live_audio lib (Rust)
+│   │   ├── Cargo.toml               # Emits both [[bin]] and [lib]
+│   │   └── src/
+│   │       ├── lib.rs               # Audio IPC protocol types + serialization
+│   │       └── main.rs              # WASAPI capture, f32→s16le, 10ms chunks → stdout
+│   │
 │   ├── live-capture/                # live-capture.exe + live_capture lib (Rust)
 │   │   ├── Cargo.toml               # Emits both [[bin]] and [lib]
 │   │   └── src/
@@ -685,7 +736,11 @@ Nekomaru-LiveUI-v2/
 │   ├── persist.ts                   # JSON file persistence utility (loadJson/saveJson, creates data/)
 │   ├── selector.ts                  # Auto window selector (replaces "main" stream on foreground change)
 │   ├── youtube-music.ts             # YouTube Music manager (manages "youtube-music" crop stream)
-│   └── strings.ts                   # String store: Map<string,string> + Hono routes, persisted to data/
+│   ├── strings.ts                   # String store: Map<string,string> + Hono routes, persisted to data/
+│   ├── audio.ts                     # Audio manager (spawns live-audio.exe, reads stdout)
+│   ├── audio-protocol.ts            # Incremental binary parser for audio IPC messages
+│   ├── audio-buffer.ts              # Circular audio chunk buffer (100 chunks, pre-serialized)
+│   └── audio-api.ts                 # Hono routes for /api/v1/audio/* (init, chunks)
 │
 └── frontend/                        # Frontend (React + Vite + Tailwind)
     ├── package.json
@@ -706,6 +761,9 @@ Nekomaru-LiveUI-v2/
     │   ├── widgets/                 # SidePanel widgets
     │   │   ├── common.tsx           # LiveWidget base component (icon + label + content layout)
     │   │   └── index.tsx            # All widgets: Clock, Status, Capture, About
+    │   ├── audio/                   # Audio streaming module
+    │   │   ├── index.tsx            # <AudioStream> (polls PCM chunks, posts to worklet)
+    │   │   └── worklet.ts           # PCM AudioWorklet processor (ring buffer, s16→f32)
     │   └── stream/                  # Self-contained H.264 stream module
     │       ├── index.tsx            # <StreamRenderer> (generation-aware, owns decoder lifecycle)
     │       └── decoder.ts           # H264Decoder (WebCodecs + avcC + fetchInit, retries 404/503)

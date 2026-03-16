@@ -4,16 +4,19 @@
 // them through an AudioWorklet.  Mounts at the app root — audio is global
 // (not per-stream).
 //
+// No A/V sync — both audio and video use wall-clock timestamps from the
+// same machine, and the ~20ms latency difference (audio has no encoding
+// step) is imperceptible.  Chunks are posted to the worklet immediately.
+//
 // Lifecycle:
 //   1. Create AudioContext at the device's native sample rate
 //   2. Load the PCM worklet module
 //   3. Fetch /api/v1/audio/init (retry on 503 until params arrive)
 //   4. Poll /api/v1/audio/chunks?after=N with adaptive timing
-//   5. Buffer chunks that are ahead of video, release when A/V sync allows
+//   5. Post all received chunks to the worklet immediately
 //   6. Handle browser autoplay policy via user interaction resume
 
 import { useEffect } from "react";
-import { avSync } from "./sync";
 
 /// Normal poll interval when chunks were received (ms).
 const POLL_INTERVAL_MS = 16;
@@ -24,11 +27,6 @@ const POLL_FAST_MS = 4;
 
 /// How long to wait before retrying /init when it returns 503 (ms).
 const INIT_RETRY_MS = 500;
-
-/// Maximum number of chunks to hold in the pending queue before flushing.
-/// 100 chunks × 10ms = 1 second — if we accumulate more, video is likely
-/// stalled and holding further serves no purpose.
-const MAX_PENDING_CHUNKS = 100;
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -87,30 +85,11 @@ async function startAudioLoop(signal: AbortSignal): Promise<void> {
     });
     workletNode.connect(ctx.destination);
 
-    // Step 3: Poll for audio chunks.
-    //
-    // Chunks that arrive ahead of video are held in a pending queue and
-    // re-checked each iteration — never dropped.  The old code updated
-    // lastSequence before the sync check, permanently losing chunks that
-    // failed shouldRelease().
+    // Step 3: Poll for audio chunks and post them to the worklet immediately.
     let lastSequence = 0;
-    const pending: ParsedChunk[] = [];
 
     while (!signal.aborted) {
         try {
-            // Drain pending chunks that are now releasable.
-            let i = 0;
-            while (i < pending.length) {
-                const held = pending[i];
-                if (held && avSync.shouldRelease(held.timestampUs)) {
-                    postChunkToWorklet(workletNode, held, params.channels);
-                    pending.splice(i, 1);
-                } else {
-                    i++;
-                }
-            }
-
-            // Fetch new chunks from the server.
             const res = await fetch(
                 `/api/v1/audio/chunks?after=${lastSequence}`,
                 { signal });
@@ -125,21 +104,7 @@ async function startAudioLoop(signal: AbortSignal): Promise<void> {
 
             for (const chunk of chunks) {
                 lastSequence = Math.max(lastSequence, chunk.sequence);
-
-                if (avSync.shouldRelease(chunk.timestampUs)) {
-                    postChunkToWorklet(workletNode, chunk, params.channels);
-                } else {
-                    pending.push(chunk);
-                }
-            }
-
-            // Safety: flush if pending grows too large (video likely stalled).
-            if (pending.length > MAX_PENDING_CHUNKS) {
-                console.warn("AudioStream: pending queue overflow (%d), flushing", pending.length);
-                for (const chunk of pending) {
-                    postChunkToWorklet(workletNode, chunk, params.channels);
-                }
-                pending.length = 0;
+                postChunkToWorklet(workletNode, chunk, params.channels);
             }
 
             // Adaptive timing: retry quickly when server had nothing new,
