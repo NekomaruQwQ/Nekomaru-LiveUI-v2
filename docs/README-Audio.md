@@ -1,6 +1,6 @@
 # Audio Streaming Subsystem
 
-**Low-latency raw PCM audio capture from WASAPI → HTTP polling → browser AudioWorklet playback, synchronized to the video stream.**
+**Low-latency raw PCM audio capture from WASAPI → HTTP polling → browser AudioWorklet playback.**
 
 **Last Updated**: 2026-03-16
 
@@ -13,7 +13,6 @@
 - [Data Flow](#data-flow)
 - [IPC Wire Protocol](#ipc-wire-protocol)
 - [HTTP API](#http-api)
-- [A/V Synchronization](#av-synchronization)
 - [Frontend Audio Pipeline](#frontend-audio-pipeline)
 - [Configuration](#configuration)
 - [File Map](#file-map)
@@ -55,7 +54,7 @@ Three layers, mirroring the video pipeline:
                        │ HTTP polling (~16ms interval)
 ┌──────────────────────▼───────────────────────────────────────────────┐
 │  Frontend: <AudioStream /> (React)                                   │
-│  Fetch chunks → A/V sync gate → AudioWorklet (ring buffer → output)  │
+│  Fetch chunks → AudioWorklet (ring buffer → output)                  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,8 +96,8 @@ Three layers, mirroring the video pipeline:
 1. Fetches `GET /api/v1/audio/init` (retries on 503 until params arrive)
 2. Creates an `AudioContext` at the device's native sample rate
 3. Loads the `PcmWorkletProcessor` module via `audioWorklet.addModule()`
-4. Polls `GET /api/v1/audio/chunks?after=N` at ~16ms intervals
-5. For each chunk, checks the A/V sync controller before posting to the worklet
+4. Polls `GET /api/v1/audio/chunks?after=N` with adaptive timing (16ms normal, 4ms fast retry when empty)
+5. Posts all received chunks to the worklet immediately (no A/V sync gating)
 6. The worklet converts s16le → f32, writes to a ring buffer, and outputs via `process()`
 
 ## IPC Wire Protocol
@@ -175,44 +174,7 @@ per chunk:
 
 Each chunk's payload is the pre-serialized `[u64 LE: timestamp_us][PCM bytes]`.
 
-The frontend extracts `timestamp_us` from the first 8 bytes for A/V sync, then
-posts the remaining PCM bytes to the AudioWorklet.
-
-## A/V Synchronization
-
-Audio arrives faster than video because it has no encoding step (raw PCM vs
-H.264 NVENC). The sync strategy is **audio paces itself to video**:
-
-### `AVSyncController` (singleton, `frontend/src/audio/sync.ts`)
-
-- **Video side**: `StreamRenderer` calls `avSync.reportVideoTimestamp(ts)` each
-  time a decoded `VideoFrame` is rendered. The timestamp is the wall-clock value
-  from the capture process (microseconds since Unix epoch).
-
-- **Audio side**: `AudioStream` calls `avSync.shouldRelease(audioTimestampUs)`
-  for each chunk before posting it to the worklet. A chunk is released when:
-  ```
-  audioTimestampUs <= latestVideoTimestampUs + 20ms
-  ```
-
-- **Edge case**: When no video timestamp has been reported (value is `0n`), all
-  audio is released unconditionally. This prevents audio from being permanently
-  held if the video stream hasn't started yet.
-
-### Why 20ms threshold?
-
-Accounts for measurement jitter (HTTP polling intervals, event loop scheduling)
-and the fact that video and audio timestamps come from independent
-`SystemTime::now()` calls on the capture host. On WLAN with ~5ms jitter, 20ms
-provides sufficient headroom without introducing perceptible audio delay.
-
-### Timestamp source
-
-Both `live-capture.exe` and `live-audio.exe` use the same wall clock:
-```rust
-SystemTime::now().duration_since(UNIX_EPOCH).as_micros() as u64
-```
-This makes their timestamps directly comparable for frontend sync.
+The frontend extracts `timestamp_us` from the first 8 bytes (currently unused — retained for future sync if needed), then posts the remaining PCM bytes to the AudioWorklet.
 
 ## Frontend Audio Pipeline
 
@@ -221,12 +183,13 @@ This makes their timestamps directly comparable for frontend sync.
 Runs on the dedicated audio rendering thread (not the main thread).
 
 - **Input**: `MessagePort` receives `{ type: "pcm", samples: Int16Array, channels }` from the main thread
-- **Ring buffer**: ~50ms capacity (2400 frames at 48kHz). Stores f32 samples (converted from s16le on write).
+- **Ring buffer**: ~200ms capacity (9600 frames at 48kHz). Stores f32 samples (converted from s16le on write).
 - **Output**: `process()` pulls 128 frames per call from the ring buffer into the output channels
 - **Underrun**: Outputs silence (zeros) — no glitch artifacts
 
-Why 50ms ring buffer? Small enough to keep latency low, large enough to absorb
-jitter from the HTTP polling interval (~16ms) and WLAN variability (~5ms).
+Why 200ms ring buffer? Large enough to absorb HTTP polling jitter (~25–35ms
+effective interval), occasional GC pauses, and bursty chunk delivery — while
+keeping latency well under the 250ms streaming target.
 
 ### Browser autoplay policy
 
@@ -240,7 +203,7 @@ All audio configuration lives in `server/common.ts`:
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `audioExePath` | `../target/debug/live-audio.exe` | Path to the Rust binary |
+| `audioExePath` | `../target/debug/live-audio.app.exe` | Path to the Rust binary |
 | `audioDeviceName` | `"Loopback L + R (Focusrite USB Audio)"` | WASAPI device friendly name |
 
 The device name is passed to `live-audio.exe` via `--device`. The Rust binary
@@ -260,9 +223,9 @@ live-audio.exe --list-devices
 | `audio.ts` | `AUDIO_BUFFER_CAPACITY` | 100 | Server circular buffer size (chunks) |
 | `audio-api.ts` | — | — | No tuning constants (stateless) |
 | `index.tsx` | `POLL_INTERVAL_MS` | 16 | Frontend HTTP poll interval (ms) |
+| `index.tsx` | `POLL_FAST_MS` | 4 | Fast retry interval when server had no new chunks (ms) |
 | `index.tsx` | `INIT_RETRY_MS` | 500 | Retry delay for `/init` 503s (ms) |
-| `worklet.ts` | `RING_CAPACITY_FRAMES` | 2400 | AudioWorklet ring buffer (frames, ~50ms) |
-| `sync.ts` | `SYNC_THRESHOLD_US` | 20000 | A/V sync tolerance (μs) |
+| `worklet.ts` | `RING_CAPACITY_FRAMES` | 9600 | AudioWorklet ring buffer (frames, ~200ms) |
 
 ## File Map
 
@@ -289,16 +252,14 @@ live-audio.exe --list-devices
 
 | File | Purpose |
 |------|---------|
-| `worklet.ts` | AudioWorklet processor: ring buffer, s16le→f32, silence on underrun |
-| `sync.ts` | A/V sync controller: timestamp comparison, 20ms threshold |
-| `index.tsx` | `<AudioStream />` component: init fetch, chunk polling, worklet wiring |
+| `worklet.ts` | AudioWorklet processor: 200ms ring buffer, s16le→f32, silence on underrun |
+| `index.tsx` | `<AudioStream />` component: init fetch, adaptive chunk polling, worklet wiring |
 
 ### Frontend (edited)
 
 | File | Change |
 |------|--------|
 | `app.tsx` | Mounts `<AudioStream />` at app root |
-| `stream/index.tsx` | Reports video timestamps to `avSync` for A/V sync |
 
 ## Bandwidth & Latency Budget
 
@@ -323,12 +284,12 @@ bandwidth — acceptable for WLAN streaming.
 | Server buffer | 0ms (immediate push) |
 | HTTP poll interval | 0–16ms |
 | WLAN round trip | ~5ms |
-| AudioWorklet ring buffer | 0–50ms (jitter absorption) |
-| **Total** | **~30–90ms** |
+| AudioWorklet ring buffer | 0–200ms (jitter absorption) |
+| **Total** | **~30–240ms** |
 
 The bottleneck is the frontend polling interval + worklet ring buffer. The
-actual perceived latency depends on how full the ring buffer is at any given
-moment — in steady state it should be near the low end.
+200ms ring buffer is sized for worst-case jitter absorption; in steady state
+the buffer stays near-empty and perceived latency is closer to 30–60ms.
 
 ## Testing
 
@@ -413,10 +374,11 @@ ensuring glitch-free playback independent of main thread load.
   chunk is 1920 bytes — small enough for low overhead, large enough to amortize
   IPC and HTTP costs.
 
-### Why audio syncs to video (not the other way around)?
+### Why no A/V sync?
 
-Video has higher latency (H.264 encoding + decoding) and is the primary content.
-Audio has no encoding step and arrives faster. Holding audio until the video
-clock catches up is simpler and more robust than trying to speed up or slow down
-video to match audio. The 20ms sync threshold accounts for clock jitter without
-introducing perceptible delay.
+Both `live-capture.exe` and `live-audio.exe` use the same wall clock
+(`SystemTime::now()`) on the same machine, so their timestamps are directly
+comparable. Audio has no encoding step and arrives ~20ms ahead of video — but
+this difference is imperceptible. Explicit sync (holding audio until video
+catches up) would add complexity with no audible benefit, so chunks are posted
+to the worklet immediately.

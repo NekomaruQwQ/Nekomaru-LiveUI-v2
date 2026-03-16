@@ -97,7 +97,7 @@ pub struct CodecParams {
 /// Sent as a `0x02` message for every frame the encoder produces.
 #[derive(Debug, Clone)]
 pub struct FrameMessage {
-    /// Wall-clock timestamp in microseconds since stream start.
+    /// Wall-clock timestamp in microseconds since Unix epoch.
     pub timestamp_us: u64,
     /// Whether this frame contains an IDR NAL unit (keyframe).
     pub is_keyframe: bool,
