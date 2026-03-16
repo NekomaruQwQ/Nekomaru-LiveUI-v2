@@ -28,5 +28,9 @@ export const audioDeviceName = "Loopback L + R (Focusrite USB Audio)";
 /// feedback loops during localhost development.
 export const audioEnabled = !!process.env.LIVE_AUDIO;
 
+/// Path to the live-kpm.exe binary.
+export const kpmExePath =
+    path.resolve(import.meta.dirname, "../target/debug/live-kpm.app.exe");
+
 /// Number of frames to buffer per stream (~1 second at 60fps).
 export const frameBufferCapacity = 60;

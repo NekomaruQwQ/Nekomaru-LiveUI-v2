@@ -1,0 +1,18 @@
+[package]
+name = "live-kpm"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true }
+log = { workspace = true }
+pretty_env_logger = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

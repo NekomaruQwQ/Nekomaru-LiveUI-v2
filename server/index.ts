@@ -24,8 +24,10 @@ import { destroyAll } from "./process";
 import { selector } from "./selector";
 import { ytmManager } from "./youtube-music";
 import { audioManager } from "./audio";
+import { kpmManager } from "./kpm";
 import api from "./api";
 import audioApi from "./audio-api";
+import kpmApi from "./kpm-api";
 import stringsApi, { reloadStore, setComputed } from "./strings";
 
 const log = createLogger("server::server");
@@ -36,6 +38,7 @@ const honoApp =
     new Hono()
         .route("/api/v1/streams", api)
         .route("/api/v1/audio", audioApi)
+        .route("/api/v1/kpm", kpmApi)
         .route("/api/v1/strings", stringsApi)
 
         /// Reload selector config and string store from disk.
@@ -83,6 +86,7 @@ httpServer.listen(serverPort, async () => {
     selector.start();
     ytmManager.start();
     if (audioEnabled) audioManager.start();
+    kpmManager.start();
 
     // Push the parent revision's timestamp as a computed string for the
     // About widget.  Falls back silently if jj is unavailable.
@@ -104,6 +108,7 @@ process.on("SIGINT", () => {
     selector.stop();
     ytmManager.stop();
     audioManager.stop();
+    kpmManager.stop();
     destroyAll();
     process.exit(0);
 });
@@ -112,6 +117,7 @@ process.on("SIGTERM", () => {
     selector.stop();
     ytmManager.stop();
     audioManager.stop();
+    kpmManager.stop();
     destroyAll();
     process.exit(0);
 });

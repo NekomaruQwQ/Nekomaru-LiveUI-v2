@@ -5,6 +5,7 @@ import { useStrings } from "@/strings";
 import Marquee from "@/components/marquee";
 import Grid from "@/components/grid";
 import { ClockWidget, LiveModeWidget, CaptureWidget, AboutWidget } from "./widgets";
+import { KpmMeter } from "@/kpm";
 
 /// Pure viewer shell.  Stream lifecycle is fully server-managed — the
 /// frontend just renders two well-known stream IDs and polls for
@@ -68,6 +69,6 @@ function SidePanel() {
 
 function ActionPanel() {
     return <div className="island p-2 flex! w-full h-full flex-col">
-        {/* Add more user info or controls here */}
+        <KpmMeter />
     </div>;
 }
