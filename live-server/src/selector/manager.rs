@@ -95,7 +95,7 @@ impl SelectorState {
             }
         }));
 
-        log::info!("[selector] started");
+        log::info!("started");
     }
 
     /// Stop polling and destroy the managed stream.
@@ -125,7 +125,7 @@ impl SelectorState {
             s.clear_computed(CSID_LIVE_MODE);
         });
 
-        log::info!("[selector] stopped");
+        log::info!("stopped");
     }
 
     /// Reload config from disk.
@@ -205,7 +205,7 @@ async fn poll_once(
         }
     }
 
-    log::info!("[selector] capturing {hwnd_str}");
+    log::info!("capturing {hwnd_str}");
 }
 
 fn format_hwnd(hwnd: usize) -> String {

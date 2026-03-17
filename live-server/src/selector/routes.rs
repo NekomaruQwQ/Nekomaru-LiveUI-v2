@@ -67,7 +67,7 @@ async fn set_config(
     let mut sel = state.selector_mut().await;
     sel.config = config;
     sel.config.save();
-    log::info!("[selector] config updated: preset=\"{}\", {} preset(s)",
+    log::info!("config updated: preset=\"{}\", {} preset(s)",
         sel.config.preset, sel.config.presets.len());
     drop(sel);
     Json(serde_json::json!({ "ok": true }))
@@ -93,7 +93,7 @@ async fn set_preset(
 
     name.clone_into(&mut sel.config.preset);
     sel.config.save();
-    log::info!("[selector] switched to preset \"{name}\"");
+    log::info!("switched to preset \"{name}\"");
     drop(sel);
 
     Json(serde_json::json!({ "ok": true })).into_response()

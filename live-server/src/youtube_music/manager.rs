@@ -49,7 +49,7 @@ impl YtmState {
             }
         }));
 
-        log::info!("[ytm] started");
+        log::info!("started");
     }
 
     /// Stop polling and destroy the managed YouTube Music stream.
@@ -68,7 +68,7 @@ impl YtmState {
             streams.write().await.destroy_stream(STREAM_ID_YTM);
         });
 
-        log::info!("[ytm] stopped");
+        log::info!("stopped");
     }
 }
 
@@ -99,7 +99,7 @@ async fn poll_once(
         if current.as_deref() == Some(&hwnd_str) { return; }
         drop(current);
 
-        log::info!("[ytm] window detected: {hwnd_str} ({}x{})", ytm.width, ytm.height);
+        log::info!("window detected: {hwnd_str} ({}x{})", ytm.width, ytm.height);
 
         let Some(crop) = crate::constant::get_youtube_music_crop_geometry(ytm.width, ytm.height)
             else { return; };
@@ -117,7 +117,7 @@ async fn poll_once(
             drop(current);
             streams_arc.write().await.destroy_stream(STREAM_ID_YTM);
             *last_hwnd.write().await = None;
-            log::info!("[ytm] window disappeared, stream destroyed");
+            log::info!("window disappeared, stream destroyed");
         }
     }
 }

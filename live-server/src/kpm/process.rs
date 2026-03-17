@@ -47,7 +47,7 @@ impl KpmState {
             .unwrap_or_else(|e| panic!("failed to spawn {exe_path}: {e}"));
 
         if let Err(e) = job.assign(&child) {
-            log::warn!("[kpm] failed to assign to job object: {e}");
+            log::warn!("failed to assign to job object: {e}");
         }
 
         let stdout = child.stdout.take().expect("stdout must be piped");
@@ -65,11 +65,11 @@ impl KpmState {
                         drop(state);
                     }
                     Ok(None) => {
-                        log::info!("[kpm] stdout EOF");
+                        log::info!("stdout EOF");
                         break;
                     }
                     Err(e) => {
-                        log::error!("[kpm] read error: {e}");
+                        log::error!("read error: {e}");
                         break;
                     }
                 }
@@ -84,7 +84,7 @@ impl KpmState {
         self.reader_handle = Some(reader_handle);
         self.active = true;
 
-        log::info!("[kpm] started (batch: {KPM_BATCH_INTERVAL_MS}ms, window: {KPM_WINDOW_DURATION_MS}ms)");
+        log::info!("started (batch: {KPM_BATCH_INTERVAL_MS}ms, window: {KPM_WINDOW_DURATION_MS}ms)");
     }
 
     pub fn stop(&mut self) {
@@ -100,7 +100,7 @@ impl KpmState {
 
         self.active = false;
         self.calculator.reset();
-        log::info!("[kpm] stopped");
+        log::info!("stopped");
     }
 }
 

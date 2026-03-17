@@ -58,7 +58,7 @@ impl AudioState {
             .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", args[0]));
 
         if let Err(e) = job.assign(&child) {
-            log::warn!("[audio] failed to assign to job object: {e}");
+            log::warn!("failed to assign to job object: {e}");
         }
 
         let stdout = child.stdout.take().expect("stdout must be piped");
@@ -75,25 +75,25 @@ impl AudioState {
                         match msg {
                             Message::AudioParams(params) => {
                                 log::info!(
-                                    "[audio] params: {}Hz, {}ch, {}-bit",
+                                    "params: {}Hz, {}ch, {}-bit",
                                     params.sample_rate, params.channels, params.bits_per_sample);
                                 state.buffer.set_audio_params(params);
                             }
-                            Message::AudioFrame(frame) => {
+                            Message::AudioChunk(frame) => {
                                 state.buffer.push_chunk(&frame);
                             }
                             Message::Error(e) => {
-                                log::error!("[audio] capture error: {e}");
+                                log::error!("capture error: {e}");
                             }
                         }
                         drop(state);
                     }
                     Ok(None) => {
-                        log::info!("[audio] stdout EOF");
+                        log::info!("stdout EOF");
                         break;
                     }
                     Err(e) => {
-                        log::error!("[audio] read error: {e}");
+                        log::error!("read error: {e}");
                         break;
                     }
                 }
@@ -109,7 +109,7 @@ impl AudioState {
         self.reader_handle = Some(reader_handle);
         self.active = true;
 
-        log::info!("[audio] started");
+        log::info!("started");
     }
 
     /// Stop the audio capture process.
@@ -126,7 +126,7 @@ impl AudioState {
 
         self.active = false;
         self.buffer.reset();
-        log::info!("[audio] stopped");
+        log::info!("stopped");
     }
 }
 
