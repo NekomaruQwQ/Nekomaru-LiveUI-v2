@@ -14,10 +14,14 @@ refresh:
 capture name:
     http put $"{{base_url}}/api/v1/streams/auto/config/preset" "{{name}}"
 
-app *args:
-    cargo run -p live-app -- -x 1280 -y 720 $"{{base_url}}" {{args}}
-youtube-music *args:
-    cargo run -p live-app -- -x 1280 -y 720 -s 2 \
-        "https://music.youtube.com/" -t "YouTube Music" {{args}}
 server *args:
+    cargo build
     cargo run -p live-server -- {{args}}
+app *args:
+    use .mod.nu run-app; \
+    run-app app \
+        -x 1280 -y 720 $"{{base_url}}" {{args}}
+youtube-music *args:
+    use .mod.nu run-app; \
+    run-app youtube-music \
+        -x 1280 -y 720 -s 2 -t "YouTube Music" "https://music.youtube.com/" {{args}}
