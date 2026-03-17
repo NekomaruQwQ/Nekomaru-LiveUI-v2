@@ -504,7 +504,7 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
 | **Decoder** | `frontend/src/video/decoder.ts` | Done | Thin WebCodecs wrapper — zero H.264 format knowledge. Server provides pre-built codec string + avcC descriptor (via `/init`) and AVCC-formatted frame payloads (via `/frames`). `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). `decodeFrame()` passes AVCC data directly to `EncodedVideoChunk` with no conversion. |
-| **Renderer** | `frontend/src/video/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Owns full decoder lifecycle via `startStreamLoop()`. 404 treated as retriable. Parses binary frame responses directly (`parseBinaryFrameResponse()` — zero-copy `subarray` slices, envelope includes timestamp + keyframe flag). |
+| **Renderer** | `frontend/src/video/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Reinit retries in a loop on failure (prevents frozen canvas from a dead decoder). Owns full decoder lifecycle via `startStreamLoop()`. 404 treated as retriable. Parses binary frame responses directly (`parseBinaryFrameResponse()` — zero-copy `subarray` slices, envelope includes timestamp + keyframe flag). |
 
 ### Completed (`live-audio` crate — `live-audio/`)
 
@@ -549,7 +549,7 @@ Replaces the former TypeScript Hono server.  All server logic is now Rust.  Modu
 | **Constants** | `live-server/src/constant.rs` | Done | Centralized well-known values: data paths, stream IDs (`STREAM_ID_MAIN`, `STREAM_ID_YTM`), computed string keys (`CSID_*`), capture defaults, buffer capacities, poll intervals, YTM crop geometry (`ytm_crop_geometry()`), default selector config (`default_selector_config()` via `json!`). |
 | **Shared State** | `live-server/src/state.rs` | Done | `AppState` with per-subsystem `Arc<RwLock<T>>`. Accessor methods for read/write locks and cloneable `Arc` handles for child-process reader tasks. |
 | **Video Buffer** | `live-server/src/video/buffer.rs` | Done | Per-stream circular buffer (60 frames). Annex B → AVCC conversion at push time (`strip_start_code` + 4-byte BE length prefix per NAL). Keyframe gating for first client request. `build_codec_string()` / `build_avcc_descriptor()` for the `/init` endpoint — both strip start codes from `CodecParams.sps`/`.pps` (which contain raw `NALUnit.data` with Annex B prefixes). `reset()` on stream replacement. 15 unit tests. |
-| **Video Process** | `live-server/src/video/process.rs` | Done | `StreamRegistry` with `CaptureStream` entries. `spawn_and_wire()` spawns `live-video.exe` with `--stream-id`, reads stdout via `live_video::read_message()` on `spawn_blocking` thread, pushes into buffer. `create_stream()` / `create_crop_stream()` for manual use. `replace_stream()` / `replace_crop_stream()` for well-known IDs — kill old, reset buffer, bump generation (idempotent). Stderr inherited (child tags its own log lines via `--stream-id`). |
+| **Video Process** | `live-server/src/video/process.rs` | Done | `StreamRegistry` with `CaptureStream` entries. `spawn_and_wire()` spawns `live-video.exe` with `--stream-id`, reads stdout via `live_video::read_message()` on `spawn_blocking` thread, pushes into buffer. Generation-guarded: each reader task receives its generation number and checks `stream.generation == my_generation` before every write — stale readers from replaced processes (whose `spawn_blocking` tasks cannot be cancelled) never touch the new generation's buffer or status. `create_stream()` / `create_crop_stream()` for manual use. `replace_stream()` / `replace_crop_stream()` for well-known IDs — kill old, reset buffer, bump generation (idempotent). Stderr inherited (child tags its own log lines via `--stream-id`). |
 | **Video Routes** | `live-server/src/video/routes.rs` | Done | `GET/POST /streams`, `DELETE /streams/:id`, `GET /streams/:id/init` (codec string + avcC base64), `GET /streams/:id/frames?after=N` (binary AVCC with generation + per-frame timestamp/keyframe envelope). |
 | **Audio Buffer** | `live-server/src/audio/buffer.rs` | Done | Circular chunk buffer (100 chunks = ~1s). Pre-serialized payloads. Generation reset detection (stale cursor → return all). 4 unit tests. |
 | **Audio Process** | `live-server/src/audio/process.rs` | Done | `AudioState` singleton. Spawns `live-audio.exe`, reads stdout via `live_audio::read_message()`. Stderr inherited. Reset on process exit. |
@@ -682,6 +682,14 @@ Within `live-video.exe`, the capture thread (main) and encoding thread share a s
 **Fix**: `build_codec_string()` and `build_avcc_descriptor()` now call `strip_start_code()` before accessing SPS/PPS bytes. The old frontend code did this too (calling `stripStartCode()` after base64 decode) — it wasn't redundant.
 
 **Lesson**: Don't trust doc comments over actual data flow. Trace the bytes from producer to consumer.
+
+### Bug #5: Stream Switch Freezes Frontend on Old Frame
+
+**Problem**: When the auto-selector switched the "main" stream to a new foreground window, the frontend canvas stayed frozen on the last frame from the old stream. The old `live-video.exe` reader task (running on `tokio::task::spawn_blocking`) could not be cancelled by `JoinHandle::abort()` — it continued draining the OS pipe buffer after the stream was replaced. The stale reader could overwrite `codec_params` with old SPS/PPS after the new reader had set the correct params, causing the frontend's decoder to be configured for the wrong stream. Additionally, if `decoder.init()` threw during reinit, the stream loop continued with an unconfigured decoder that silently dropped all frames.
+
+**Fix**: (1) `spawn_and_wire()` now receives the stream's generation number. The reader task checks `stream.generation == my_generation` before every write — stale readers exit silently. (2) The frontend's reinit path retries `decoder.init()` in a loop instead of falling through with a broken decoder.
+
+**Lesson**: `tokio::task::spawn_blocking` tasks are not cancellable — `JoinHandle::abort()` only drops the handle, the blocking thread keeps running. Any shared mutable state accessed by a `spawn_blocking` task needs an explicit validity check (here: generation number) to prevent stale writes after the owning context has moved on.
 
 ---
 

@@ -216,7 +216,7 @@ impl StreamRegistry {
             stream.generation += 1;
             let generation = stream.generation;
 
-            let (child, reader_handle) = spawn_and_wire(id, args, &self.job, registry);
+            let (child, reader_handle) = spawn_and_wire(id, generation, args, &self.job, registry);
             stream.child = Some(child);
             stream.reader_handle = Some(reader_handle);
 
@@ -233,14 +233,15 @@ impl StreamRegistry {
         args: &[String],
         registry: &std::sync::Arc<RwLock<Self>>,
     ) {
-        let (child, reader_handle) = spawn_and_wire(id, args, &self.job, registry);
+        let initial_generation = 1;
+        let (child, reader_handle) = spawn_and_wire(id, initial_generation, args, &self.job, registry);
 
         let stream = VideoStream {
             id: id.to_owned(),
             hwnd: hwnd.to_owned(),
             status: StreamStatus::Starting,
             buffer: StreamBuffer::new(FRAME_BUFFER_CAPACITY),
-            generation: 1,
+            generation: initial_generation,
             child: Some(child),
             reader_handle: Some(reader_handle),
         };
@@ -272,9 +273,16 @@ pub struct StreamInfo {
 /// Spawn a `live-video.exe` child process and start a tokio task that reads
 /// its stdout via `live_video::read_message()`.
 ///
+/// `generation` identifies this reader's owning generation.  The reader task
+/// checks `stream.generation == generation` before every write so that a
+/// stale reader (from a replaced process whose `spawn_blocking` task cannot
+/// be cancelled) never overwrites codec params, frames, or status belonging
+/// to a newer generation.
+///
 /// Returns the child process handle and the reader task's join handle.
 fn spawn_and_wire(
     id: &str,
+    generation: u32,
     args: &[String],
     job: &JobObject,
     registry: &std::sync::Arc<RwLock<StreamRegistry>>,
@@ -299,6 +307,11 @@ fn spawn_and_wire(
     // Stdout reader: blocking read_message() on a dedicated thread.
     // Uses blocking_write() to push frames — hold time is microseconds per
     // frame, so contention with HTTP readers is negligible.
+    //
+    // Generation guard: `spawn_blocking` tasks cannot be cancelled by
+    // `JoinHandle::abort()`.  After a stream replacement the old reader may
+    // still be draining the pipe.  The generation check ensures it never
+    // touches the buffer or status of the replacement stream.
     let reader_handle = tokio::task::spawn_blocking(move || {
         let mut reader = BufReader::new(stdout);
         loop {
@@ -306,6 +319,9 @@ fn spawn_and_wire(
                 Ok(Some(msg)) => {
                     let mut registry = registry_clone.blocking_write();
                     if let Some(stream) = registry.streams.get_mut(&id_owned) {
+                        // Stale reader from a replaced generation — stop silently.
+                        if stream.generation != generation { break; }
+
                         match msg {
                             Message::CodecParams(params) => {
                                 stream.buffer.set_codec_params(params);
@@ -335,10 +351,12 @@ fn spawn_and_wire(
             }
         }
 
-        // Mark stream as stopped.
+        // Mark stream as stopped — only if we still own this generation.
         let mut registry = registry_clone.blocking_write();
         if let Some(stream) = registry.streams.get_mut(&id_owned) {
-            stream.status = StreamStatus::Stopped;
+            if stream.generation == generation {
+                stream.status = StreamStatus::Stopped;
+            }
         }
     });
 

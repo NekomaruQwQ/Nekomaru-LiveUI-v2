@@ -185,12 +185,25 @@ async function startStreamLoop(
                 new Uint8Array(await res.arrayBuffer()));
 
             // ── Generation change: reinitialize decoder ──────────────────
+            // Retry init in a loop: if the new capture process is still
+            // starting, fetchInit() may throw after exhausting retries.
+            // Without this, the decoder stays unconfigured and all
+            // subsequent frames are silently dropped (frozen canvas).
             if (currentGeneration !== null && generation !== currentGeneration) {
                 console.log("StreamLoop: Generation changed %d → %d, reinitializing decoder",
                     currentGeneration, generation);
                 decoder.close();
                 decoder = new H264Decoder(streamId, onFrame);
-                await decoder.init();
+                while (!signal.aborted) {
+                    try {
+                        await decoder.init();
+                        break;
+                    } catch (e) {
+                        console.warn("StreamLoop: Reinit failed, retrying:", e);
+                        await sleep(1000);
+                    }
+                }
+                if (signal.aborted) break;
                 lastSequence = 0;
             }
             currentGeneration = generation;
