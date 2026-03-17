@@ -3,7 +3,7 @@ import { DEBUG } from "../../debug";
 // ── Init with retry ─────────────────────────────────────────────────────
 
 /// Codec init params returned by the server (pre-built for WebCodecs).
-interface InitParams {
+interface CodecParams {
     codec: string;
     width: number;
     height: number;
@@ -20,7 +20,7 @@ interface InitParams {
 ///
 /// Retries with exponential backoff (capped at 2s) for up to 30 attempts,
 /// giving the server plenty of time to create and initialize the stream.
-async function fetchInit(streamId: string): Promise<InitParams> {
+async function fetchInit(streamId: string): Promise<CodecParams> {
     const maxRetries = 30;
     const baseDelayMs = 250;
 
@@ -28,7 +28,7 @@ async function fetchInit(streamId: string): Promise<InitParams> {
         const res = await fetch(`/api/v1/streams/${streamId}/init`);
 
         if (res.ok) {
-            return await res.json() as InitParams;
+            return await res.json() as CodecParams;
         }
 
         // Retriable: stream not yet created (404) or encoder still starting (503).

@@ -193,7 +193,7 @@ fn run_capture(device_name: &str) -> Result<(), String> {
 /// WASAPI shared-mode capture loop.
 ///
 /// Reads audio from the device, re-chunks into fixed-size blocks, and writes
-/// `AudioFrame` messages to stdout.  Exits cleanly on broken pipe (server
+/// `AudioChunk` messages to stdout.  Exits cleanly on broken pipe (server
 /// killed the process) or device error.
 ///
 /// # Safety
@@ -323,12 +323,12 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
                 .as_micros() as u64;
 
             let chunk_data: Vec<u8> = accum.drain(..chunk_bytes).collect();
-            let frame = AudioFrame {
+            let chunk = AudioChunk {
                 timestamp_us,
                 pcm_data: chunk_data,
             };
 
-            if let Err(e) = write_audio_frame(&mut writer, &frame) {
+            if let Err(e) = write_audio_chunk(&mut writer, &chunk) {
                 // Broken pipe means the server killed us — exit cleanly.
                 if e.kind() == std::io::ErrorKind::BrokenPipe {
                     log::info!("stdout closed, exiting");
@@ -339,7 +339,7 @@ unsafe fn capture_loop(device: &IMMDevice) -> Result<(), String> {
                     }
                     return Ok(());
                 }
-                return Err(format!("failed to write AudioFrame: {e}"));
+                return Err(format!("failed to write AudioChunk: {e}"));
             }
         }
 

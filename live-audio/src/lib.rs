@@ -28,7 +28,7 @@ pub enum MessageType {
     /// Sent once after device initialization.
     AudioParams = 0x10,
     /// One chunk of raw PCM audio data with a wall-clock timestamp.
-    AudioFrame = 0x11,
+    AudioChunk = 0x11,
     /// Non-fatal error description (UTF-8).
     Error = 0xFF,
 }
@@ -51,7 +51,7 @@ pub struct AudioParams {
 /// Each chunk contains a fixed number of samples (typically 480 = 10ms at
 /// 48kHz) as interleaved s16le data.
 #[derive(Debug, Clone)]
-pub struct AudioFrame {
+pub struct AudioChunk {
     /// Wall-clock timestamp in microseconds since Unix epoch.
     /// Uses `SystemTime::now().duration_since(UNIX_EPOCH)` — same clock as
     /// `live-video`'s video frame timestamps.
@@ -64,7 +64,7 @@ pub struct AudioFrame {
 #[derive(Debug, Clone)]
 pub enum Message {
     AudioParams(AudioParams),
-    AudioFrame(AudioFrame),
+    AudioChunk(AudioChunk),
     Error(String),
 }
 
@@ -89,20 +89,20 @@ pub fn write_audio_params(w: &mut impl Write, params: &AudioParams) -> io::Resul
     w.flush()
 }
 
-/// Write an `AudioFrame` message.
+/// Write an `AudioChunk` message.
 ///
 /// Wire layout:
 /// ```text
 /// [u64 LE: timestamp_us][raw PCM bytes]
 /// ```
-pub fn write_audio_frame(w: &mut impl Write, frame: &AudioFrame) -> io::Result<()> {
-    let payload_len = 8 + frame.pcm_data.len(); // timestamp(8) + pcm
+pub fn write_audio_chunk(w: &mut impl Write, chunk: &AudioChunk) -> io::Result<()> {
+    let payload_len = 8 + chunk.pcm_data.len(); // timestamp(8) + pcm
 
-    w.write_all(&[MessageType::AudioFrame as u8])?;
+    w.write_all(&[MessageType::AudioChunk as u8])?;
     w.write_all(&(payload_len as u32).to_le_bytes())?;
 
-    w.write_all(&frame.timestamp_us.to_le_bytes())?;
-    w.write_all(&frame.pcm_data)?;
+    w.write_all(&chunk.timestamp_us.to_le_bytes())?;
+    w.write_all(&chunk.pcm_data)?;
 
     w.flush()
 }
@@ -146,7 +146,7 @@ pub fn read_message(r: &mut impl Read) -> io::Result<Option<Message>> {
 
     match type_buf[0] {
         0x10 => read_audio_params_payload(&payload).map(|p| Some(Message::AudioParams(p))),
-        0x11 => read_audio_frame_payload(&payload).map(|f| Some(Message::AudioFrame(f))),
+        0x11 => read_audio_chunk_payload(&payload).map(|f| Some(Message::AudioChunk(f))),
         0xFF => read_error_payload(&payload).map(|e| Some(Message::Error(e))),
         other => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -168,17 +168,17 @@ fn read_audio_params_payload(data: &[u8]) -> io::Result<AudioParams> {
     Ok(AudioParams { sample_rate, channels, bits_per_sample })
 }
 
-/// Parse an `AudioFrame` payload.
-fn read_audio_frame_payload(data: &[u8]) -> io::Result<AudioFrame> {
+/// Parse an `AudioChunk` payload.
+fn read_audio_chunk_payload(data: &[u8]) -> io::Result<AudioChunk> {
     if data.len() < 8 {
-        Err(io::Error::new(io::ErrorKind::InvalidData, "truncated AudioFrame payload"))?;
+        Err(io::Error::new(io::ErrorKind::InvalidData, "truncated AudioChunk payload"))?;
     }
 
     let timestamp_us = u64::from_le_bytes(
         data[0..8].try_into().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?);
     let pcm_data = data[8..].to_vec();
 
-    Ok(AudioFrame { timestamp_us, pcm_data })
+    Ok(AudioChunk { timestamp_us, pcm_data })
 }
 
 /// Parse an Error payload as UTF-8.
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_audio_frame() {
+    fn round_trip_audio_chunk() {
         // 4 stereo s16le samples (16 bytes)
         let pcm: Vec<u8> = vec![
             0x00, 0x10, 0x00, 0x20, // L=4096, R=8192
@@ -225,23 +225,23 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // silence
             0xAB, 0xCD, 0xEF, 0x01, // arbitrary
         ];
-        let frame = AudioFrame {
+        let chunk = AudioChunk {
             timestamp_us: 1_000_000,
             pcm_data: pcm.clone(),
         };
 
         let mut buf = Vec::new();
-        write_audio_frame(&mut buf, &frame).unwrap();
+        write_audio_chunk(&mut buf, &chunk).unwrap();
 
         let mut cursor = Cursor::new(&buf);
         let msg = read_message(&mut cursor).unwrap().unwrap();
 
         match msg {
-            Message::AudioFrame(decoded) => {
+            Message::AudioChunk(decoded) => {
                 assert_eq!(decoded.timestamp_us, 1_000_000);
                 assert_eq!(decoded.pcm_data, pcm);
             },
-            other => panic!("expected AudioFrame, got {other:?}"),
+            other => panic!("expected AudioChunk, got {other:?}"),
         }
     }
 
@@ -279,40 +279,40 @@ mod tests {
         };
         write_audio_params(&mut buf, &params).unwrap();
 
-        let frame = AudioFrame {
+        let chunk = AudioChunk {
             timestamp_us: 500_000,
             pcm_data: vec![0x01, 0x02, 0x03, 0x04],
         };
-        write_audio_frame(&mut buf, &frame).unwrap();
+        write_audio_chunk(&mut buf, &chunk).unwrap();
 
         write_error(&mut buf, "test error").unwrap();
 
         let mut cursor = Cursor::new(&buf);
         assert!(matches!(read_message(&mut cursor).unwrap(), Some(Message::AudioParams(_))));
-        assert!(matches!(read_message(&mut cursor).unwrap(), Some(Message::AudioFrame(_))));
+        assert!(matches!(read_message(&mut cursor).unwrap(), Some(Message::AudioChunk(_))));
         assert!(matches!(read_message(&mut cursor).unwrap(), Some(Message::Error(_))));
         assert!(read_message(&mut cursor).unwrap().is_none());
     }
 
     #[test]
-    fn empty_pcm_frame() {
-        let frame = AudioFrame {
+    fn empty_pcm_chunk() {
+        let chunk = AudioChunk {
             timestamp_us: 0,
             pcm_data: vec![],
         };
 
         let mut buf = Vec::new();
-        write_audio_frame(&mut buf, &frame).unwrap();
+        write_audio_chunk(&mut buf, &chunk).unwrap();
 
         let mut cursor = Cursor::new(&buf);
         let msg = read_message(&mut cursor).unwrap().unwrap();
 
         match msg {
-            Message::AudioFrame(decoded) => {
+            Message::AudioChunk(decoded) => {
                 assert_eq!(decoded.timestamp_us, 0);
                 assert!(decoded.pcm_data.is_empty());
             },
-            other => panic!("expected AudioFrame, got {other:?}"),
+            other => panic!("expected AudioChunk, got {other:?}"),
         }
     }
 }

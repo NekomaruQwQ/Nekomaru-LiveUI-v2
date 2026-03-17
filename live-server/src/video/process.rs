@@ -30,7 +30,7 @@ pub enum StreamStatus {
 }
 
 /// A single capture stream backed by a `live-video.exe` child process.
-pub struct CaptureStream {
+pub struct VideoStream {
     pub id: String,
     pub hwnd: String,
     pub status: StreamStatus,
@@ -43,7 +43,7 @@ pub struct CaptureStream {
     pub reader_handle: Option<JoinHandle<()>>,
 }
 
-impl CaptureStream {
+impl VideoStream {
     /// Kill the child process and abort the reader task.
     fn kill(&mut self) {
         if let Some(mut child) = self.child.take() {
@@ -57,7 +57,7 @@ impl CaptureStream {
     }
 }
 
-impl Drop for CaptureStream {
+impl Drop for VideoStream {
     fn drop(&mut self) { self.kill(); }
 }
 
@@ -70,7 +70,7 @@ impl Drop for CaptureStream {
 /// within the lock — the granularity is the entire registry, not per-stream,
 /// keeping the implementation simple for the expected 1-3 concurrent streams.
 pub struct StreamRegistry {
-    pub streams: HashMap<String, CaptureStream>,
+    pub streams: HashMap<String, VideoStream>,
     /// Path to the `live-video.exe` binary.
     pub exe_path: String,
     /// Job object — assigned children are killed when the server exits.
@@ -235,7 +235,7 @@ impl StreamRegistry {
     ) {
         let (child, reader_handle) = spawn_and_wire(id, args, &self.job, registry);
 
-        let stream = CaptureStream {
+        let stream = VideoStream {
             id: id.to_owned(),
             hwnd: hwnd.to_owned(),
             status: StreamStatus::Starting,

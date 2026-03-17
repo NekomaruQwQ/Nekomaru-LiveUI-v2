@@ -5,7 +5,7 @@
 //!
 //! Pre-serialized payload: `[u64 LE: timestamp_us][raw PCM s16le bytes]`.
 
-use live_audio::{AudioFrame, AudioParams};
+use live_audio::{AudioChunk, AudioParams};
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,14 +55,14 @@ impl AudioBuffer {
         self.audio_params = None;
     }
 
-    pub fn push_chunk(&mut self, frame: &AudioFrame) {
+    pub fn push_chunk(&mut self, chunk: &AudioChunk) {
         let sequence = self.next_sequence;
         self.next_sequence += 1;
 
         // Pre-serialize: [u64 LE timestamp][PCM bytes]
-        let mut payload = Vec::with_capacity(8 + frame.pcm_data.len());
-        payload.extend_from_slice(&frame.timestamp_us.to_le_bytes());
-        payload.extend_from_slice(&frame.pcm_data);
+        let mut payload = Vec::with_capacity(8 + chunk.pcm_data.len());
+        payload.extend_from_slice(&chunk.timestamp_us.to_le_bytes());
+        payload.extend_from_slice(&chunk.pcm_data);
 
         let idx = self.write_index % self.capacity;
         self.chunks[idx] = Some(BufferedChunk { sequence, payload });
@@ -102,8 +102,8 @@ impl AudioBuffer {
 mod tests {
     use super::*;
 
-    fn make_frame(ts: u64) -> AudioFrame {
-        AudioFrame {
+    fn make_chunk(ts: u64) -> AudioChunk {
+        AudioChunk {
             timestamp_us: ts,
             pcm_data: vec![0x01, 0x02, 0x03, 0x04],
         }
@@ -112,8 +112,8 @@ mod tests {
     #[test]
     fn push_and_retrieve() {
         let mut buf = AudioBuffer::new(4);
-        buf.push_chunk(&make_frame(1000));
-        buf.push_chunk(&make_frame(2000));
+        buf.push_chunk(&make_chunk(1000));
+        buf.push_chunk(&make_chunk(2000));
 
         let chunks = buf.get_chunks_after(0);
         assert_eq!(chunks.len(), 2);
@@ -124,8 +124,8 @@ mod tests {
     #[test]
     fn generation_reset() {
         let mut buf = AudioBuffer::new(4);
-        buf.push_chunk(&make_frame(1000));
-        buf.push_chunk(&make_frame(2000));
+        buf.push_chunk(&make_chunk(1000));
+        buf.push_chunk(&make_chunk(2000));
 
         // Caller has sequence 100 (from previous generation) — should get everything.
         let chunks = buf.get_chunks_after(100);
@@ -136,7 +136,7 @@ mod tests {
     fn circular_wrap() {
         let mut buf = AudioBuffer::new(3);
         for i in 0..5 {
-            buf.push_chunk(&make_frame((i + 1) * 1000));
+            buf.push_chunk(&make_chunk((i + 1) * 1000));
         }
 
         // Only last 3 remain (seq 3, 4, 5).
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn reset_clears_everything() {
         let mut buf = AudioBuffer::new(4);
-        buf.push_chunk(&make_frame(1000));
+        buf.push_chunk(&make_chunk(1000));
         buf.set_audio_params(AudioParams { sample_rate: 48000, channels: 2, bits_per_sample: 16 });
 
         buf.reset();
@@ -156,7 +156,7 @@ mod tests {
         assert!(buf.get_audio_params().is_none());
         assert!(buf.get_chunks_after(0).is_empty());
 
-        buf.push_chunk(&make_frame(5000));
+        buf.push_chunk(&make_chunk(5000));
         assert_eq!(buf.get_chunks_after(0)[0].sequence, 1);
     }
 }

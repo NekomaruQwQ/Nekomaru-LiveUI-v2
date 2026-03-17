@@ -79,8 +79,8 @@ impl AudioState {
                                     params.sample_rate, params.channels, params.bits_per_sample);
                                 state.buffer.set_audio_params(params);
                             }
-                            Message::AudioChunk(frame) => {
-                                state.buffer.push_chunk(&frame);
+                            Message::AudioChunk(chunk) => {
+                                state.buffer.push_chunk(&chunk);
                             }
                             Message::Error(e) => {
                                 log::error!("capture error: {e}");
