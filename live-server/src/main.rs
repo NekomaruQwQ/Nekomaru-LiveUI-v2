@@ -17,6 +17,9 @@ mod windows;
 use state::AppState;
 
 use axum::Router;
+use axum::extract::State;
+use axum::response::Json;
+use axum::routing::post;
 use clap::Parser;
 
 use std::sync::Arc;
@@ -54,6 +57,7 @@ async fn main() {
     let app = Router::new()
         .merge(strings::routes::router())
         .merge(windows::router())
+        .route("/api/v1/refresh", post(refresh))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", cli.port);
@@ -71,6 +75,15 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("server error");
+}
+
+// ── Refresh ─────────────────────────────────────────────────────────────────
+
+/// `POST /api/v1/refresh` — reload string store (and later, selector config)
+/// from disk.
+async fn refresh(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    state.strings.write().await.reload();
+    Json(serde_json::json!({ "ok": true }))
 }
 
 // ── Vite Dev Server ─────────────────────────────────────────────────────────
