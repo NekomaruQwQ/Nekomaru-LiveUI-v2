@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 enumerate-windows = { workspace = true }
+set-dpi-awareness = { workspace = true }
 live-video = { path = "../live-video" }
 live-audio = { path = "../live-audio" }
 live-kpm = { path = "../live-kpm" }

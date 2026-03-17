@@ -72,6 +72,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
+    set_dpi_awareness::per_monitor_v2();
+
     pretty_env_logger::formatted_builder()
         .filter_level(log::LevelFilter::Info)
         .parse_default_env()

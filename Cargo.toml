@@ -7,6 +7,7 @@ members = [
     "live-server",
     "live-video",
     "crates/enumerate-windows",
+    "crates/set-dpi-awareness",
 ]
 
 [workspace.package]
@@ -28,6 +29,7 @@ rev = "8e9853c8"
 
 [workspace.dependencies]
 enumerate-windows = { path = "crates/enumerate-windows" }
+set-dpi-awareness = { path = "crates/set-dpi-awareness" }
 
 base64 = "0.22"    # Base64 encoding for SPS/PPS in protocol handler
 clap = { version = "4.6.0", features = ["derive"] }

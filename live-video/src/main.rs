@@ -209,6 +209,8 @@ fn init_logger(capture_mode: bool, stream_id: Option<String>) {
     // Pre-format the stream ID tag so the closure doesn't allocate per-line.
     let tag = stream_id.map_or_else(String::new, |id| format!(" @{id}"));
 
+    use pretty_env_logger::env_logger::fmt::Color;
+
     pretty_env_logger::env_logger::Builder::from_env(
         pretty_env_logger::env_logger::Env::default().default_filter_or("info"))
         .format(move |buf, record| {
@@ -216,14 +218,25 @@ fn init_logger(capture_mode: bool, stream_id: Option<String>) {
             // log::Level ordering: Error < Warn < Info < Debug < Trace.
             // >= Info captures diagnostic messages; Warn/Error fall through to stderr.
             let is_diagnostic = record.level() >= log::Level::Info;
+            // Encoder diagnostics go to a plain-text log file, not stderr.
             if is_encoder && is_diagnostic
                 && let Some(ref file) = encoder_log_file {
                     let mut f = file.lock().unwrap();
                     writeln!(f, "[{}{tag} {}] {}", record.level(), record.target(), record.args())?;
-                    drop(f); // release lock before writing to stderr
+                    drop(f);
                     return Ok(());
                 }
-            writeln!(buf, "[{}{tag} {}] {}", record.level(), record.target(), record.args())
+
+            let level = buf.default_styled_level(record.level());
+            let mut tag_style = buf.style();
+            tag_style.set_color(Color::Cyan).set_bold(true);
+            let mut target_style = buf.style();
+            target_style.set_color(Color::Black).set_bold(true);
+
+            writeln!(buf, " {level} {} {} > {}",
+                tag_style.value(&tag),
+                target_style.value(record.target()),
+                record.args())
         })
         .init();
 }
