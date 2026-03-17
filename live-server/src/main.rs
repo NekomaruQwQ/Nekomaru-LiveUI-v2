@@ -26,7 +26,9 @@ use axum::extract::State;
 use axum::response::Json;
 use axum::routing::post;
 use clap::Parser;
+use job_object::JobObject;
 
+use std::process::Child;
 use std::sync::Arc;
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
@@ -89,18 +91,23 @@ async fn main() {
     log::info!("audio exe: {audio_exe}");
     log::info!("kpm exe: {kpm_exe}");
 
-    let state = Arc::new(AppState::new(video_exe));
+    // Job object: all child processes assigned to it are killed when the
+    // server exits — even on crash or Task Manager kill.
+    let job = Arc::new(
+        JobObject::new().expect("failed to create job object"));
+
+    let state = Arc::new(AppState::new(video_exe, Arc::clone(&job)));
 
     // Start audio capture if enabled.
     if cli.audio {
         let audio_arc = state.audio_arc();
-        state.audio_mut().await.start(&audio_exe, &cli.audio_device, &audio_arc);
+        state.audio_mut().await.start(&audio_exe, &cli.audio_device, &job, &audio_arc);
     }
 
     // Start KPM capture (always enabled).
     {
         let kpm_arc = state.kpm_arc();
-        state.kpm_mut().await.start(&kpm_exe, &kpm_arc);
+        state.kpm_mut().await.start(&kpm_exe, &job, &kpm_arc);
     }
 
     // Start auto-selector and YouTube Music manager.
@@ -123,7 +130,7 @@ async fn main() {
         .merge(video::routes::router())
         .merge(windows::router())
         .route("/api/v1/refresh", post(refresh))
-        .with_state(state);
+        .with_state(Arc::clone(&state));
 
     let addr = format!("0.0.0.0:{}", cli.port);
     log::info!("listening on {addr}");
@@ -133,13 +140,28 @@ async fn main() {
         .expect("failed to bind");
 
     // Spawn Vite dev server as a child process if LIVE_PORT is set.
-    if let Some(vite_port) = cli.vite_port {
-        spawn_vite(vite_port, cli.port);
-    }
+    let mut vite_child = cli.vite_port
+        .and_then(|vp| spawn_vite(vp, cli.port, &job));
 
+    // Serve until Ctrl+C.
     axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            tokio::signal::ctrl_c().await.ok();
+            log::info!("Ctrl+C received");
+        })
         .await
         .expect("server error");
+
+    // Server has stopped accepting connections — clean up all subsystems.
+    state.shutdown().await;
+
+    if let Some(ref mut child) = vite_child {
+        let _ = child.kill();
+        let _ = child.wait();
+        log::info!("vite stopped");
+    }
+
+    // `job` drops here, killing any straggler child processes.
 }
 
 // ── Refresh ─────────────────────────────────────────────────────────────────
@@ -185,7 +207,10 @@ fn resolve_sibling_exe(name: &str) -> String {
 
 /// Spawn `bunx vite` as a child process.  Vite's proxy config (in
 /// `frontend/vite.config.ts`) forwards `/api/*` to our Axum server.
-fn spawn_vite(vite_port: u16, core_port: u16) {
+///
+/// Returns the child process handle for explicit cleanup on shutdown.
+/// The child is also assigned to the job object so it dies on crash.
+fn spawn_vite(vite_port: u16, core_port: u16, job: &JobObject) -> Option<Child> {
     let frontend_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent()?.parent()?.parent().map(|d| d.join("frontend")))
@@ -193,17 +218,23 @@ fn spawn_vite(vite_port: u16, core_port: u16) {
 
     log::info!("spawning vite dev server on port {vite_port} (frontend dir: {})", frontend_dir.display());
 
-    std::thread::spawn(move || {
-        let status = std::process::Command::new("bunx")
-            .arg("vite")
-            .current_dir(&frontend_dir)
-            .env("LIVE_PORT", vite_port.to_string())
-            .env("LIVE_CORE_PORT", core_port.to_string())
-            .status();
+    let child = std::process::Command::new("bunx")
+        .arg("vite")
+        .current_dir(&frontend_dir)
+        .env("LIVE_PORT", vite_port.to_string())
+        .env("LIVE_CORE_PORT", core_port.to_string())
+        .spawn();
 
-        match status {
-            Ok(s) => log::info!("vite exited with {s}"),
-            Err(e) => log::error!("failed to spawn vite: {e}"),
+    match child {
+        Ok(child) => {
+            if let Err(e) = job.assign(&child) {
+                log::warn!("failed to assign vite to job object: {e}");
+            }
+            Some(child)
         }
-    });
+        Err(e) => {
+            log::error!("failed to spawn vite: {e}");
+            None
+        }
+    }
 }

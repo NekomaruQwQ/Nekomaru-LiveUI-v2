@@ -60,7 +60,7 @@ impl YtmState {
         log::info!("[ytm] started");
     }
 
-    #[expect(dead_code, reason = "symmetric with start() — will be used when YTM routes are added")]
+    /// Stop polling and destroy the managed YouTube Music stream.
     pub fn stop(&mut self, streams_arc: &Arc<RwLock<StreamRegistry>>) {
         if !self.active { return; }
 

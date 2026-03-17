@@ -12,6 +12,7 @@ use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -73,13 +74,16 @@ pub struct StreamRegistry {
     pub streams: HashMap<String, CaptureStream>,
     /// Path to the `live-video.exe` binary.
     pub exe_path: String,
+    /// Job object — assigned children are killed when the server exits.
+    job: Arc<JobObject>,
 }
 
 impl StreamRegistry {
-    pub fn new(exe_path: String) -> Self {
+    pub fn new(exe_path: String, job: Arc<JobObject>) -> Self {
         Self {
             streams: HashMap::new(),
             exe_path,
+            job,
         }
     }
 
@@ -189,7 +193,6 @@ impl StreamRegistry {
     }
 
     /// Kill all child processes.  Called on server shutdown.
-    #[expect(dead_code, reason = "shutdown cleanup — called externally")]
     pub fn destroy_all(&mut self) {
         let ids: Vec<_> = self.streams.keys().cloned().collect();
         for id in ids {
@@ -214,7 +217,7 @@ impl StreamRegistry {
             stream.generation += 1;
             let generation = stream.generation;
 
-            let (child, reader_handle) = spawn_and_wire(id, args, registry);
+            let (child, reader_handle) = spawn_and_wire(id, args, &self.job, registry);
             stream.child = Some(child);
             stream.reader_handle = Some(reader_handle);
 
@@ -231,7 +234,7 @@ impl StreamRegistry {
         args: &[String],
         registry: &std::sync::Arc<RwLock<Self>>,
     ) {
-        let (child, reader_handle) = spawn_and_wire(id, args, registry);
+        let (child, reader_handle) = spawn_and_wire(id, args, &self.job, registry);
 
         let stream = CaptureStream {
             id: id.to_owned(),
@@ -274,6 +277,7 @@ pub struct StreamInfo {
 fn spawn_and_wire(
     id: &str,
     args: &[String],
+    job: &JobObject,
     registry: &std::sync::Arc<RwLock<StreamRegistry>>,
 ) -> (Child, JoinHandle<()>) {
     let mut child = Command::new(&args[0])
@@ -283,6 +287,10 @@ fn spawn_and_wire(
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", args[0]));
+
+    if let Err(e) = job.assign(&child) {
+        log::warn!("[{id}] failed to assign to job object: {e}");
+    }
 
     let stdout = child.stdout.take().expect("stdout must be piped");
 

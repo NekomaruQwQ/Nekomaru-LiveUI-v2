@@ -9,6 +9,7 @@ use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -38,7 +39,7 @@ impl KpmState {
     }
 
     /// Start the KPM capture process.
-    pub fn start(&mut self, exe_path: &str, state_arc: &Arc<RwLock<Self>>) {
+    pub fn start(&mut self, exe_path: &str, job: &JobObject, state_arc: &Arc<RwLock<Self>>) {
         if self.active { return; }
 
         let mut child = Command::new(exe_path)
@@ -48,6 +49,10 @@ impl KpmState {
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn {exe_path}: {e}"));
+
+        if let Err(e) = job.assign(&child) {
+            log::warn!("[kpm] failed to assign to job object: {e}");
+        }
 
         let stdout = child.stdout.take().expect("stdout must be piped");
 

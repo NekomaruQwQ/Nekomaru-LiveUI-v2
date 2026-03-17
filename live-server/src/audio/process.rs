@@ -11,6 +11,7 @@ use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
+use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
@@ -41,6 +42,7 @@ impl AudioState {
         &mut self,
         exe_path: &str,
         device_name: &str,
+        job: &JobObject,
         state_arc: &Arc<RwLock<Self>>,
     ) {
         if self.active { return; }
@@ -55,6 +57,10 @@ impl AudioState {
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap_or_else(|e| panic!("failed to spawn {}: {e}", args[0]));
+
+        if let Err(e) = job.assign(&child) {
+            log::warn!("[audio] failed to assign to job object: {e}");
+        }
 
         let stdout = child.stdout.take().expect("stdout must be piped");
 

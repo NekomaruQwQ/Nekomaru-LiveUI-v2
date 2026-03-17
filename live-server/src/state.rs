@@ -12,6 +12,7 @@ use crate::ytm::manager::YtmState;
 
 use std::sync::Arc;
 
+use job_object::JobObject;
 use tokio::sync::RwLock;
 
 /// Shared state for the entire server.
@@ -22,19 +23,23 @@ pub struct AppState {
     kpm: Arc<RwLock<KpmState>>,
     selector: Arc<RwLock<SelectorState>>,
     ytm: Arc<RwLock<YtmState>>,
+    job: Arc<JobObject>,
 }
 
 impl AppState {
-    pub fn new(video_exe_path: String) -> Self {
+    pub fn new(video_exe_path: String, job: Arc<JobObject>) -> Self {
         Self {
             strings: Arc::new(RwLock::new(StringStore::new())),
-            streams: Arc::new(RwLock::new(StreamRegistry::new(video_exe_path))),
+            streams: Arc::new(RwLock::new(StreamRegistry::new(video_exe_path, Arc::clone(&job)))),
             audio: Arc::new(RwLock::new(AudioState::new())),
             kpm: Arc::new(RwLock::new(KpmState::new())),
             selector: Arc::new(RwLock::new(SelectorState::new())),
             ytm: Arc::new(RwLock::new(YtmState::new())),
+            job,
         }
     }
+
+    pub fn job(&self) -> &JobObject { &self.job }
 
     // ── Strings ──────────────────────────────────────────────────────────
 
@@ -115,5 +120,35 @@ impl AppState {
     #[expect(dead_code, reason = "API completeness — no YTM routes yet")]
     pub fn ytm_arc(&self) -> Arc<RwLock<YtmState>> {
         Arc::clone(&self.ytm)
+    }
+
+    // ── Shutdown ──────────────────────────────────────────────────────────
+
+    /// Gracefully stop all subsystems.  Called once on Ctrl+C.
+    ///
+    /// Order matters: stop managers first (they create/replace streams),
+    /// then capture processes, then destroy remaining streams.
+    pub async fn shutdown(&self) {
+        log::info!("shutting down...");
+
+        // 1. Stop polling managers so they don't spawn new streams.
+        {
+            let streams_arc = self.streams_arc();
+            let strings_arc = self.strings_arc();
+            self.selector.write().await.stop(&streams_arc, &strings_arc);
+        }
+        {
+            let streams_arc = self.streams_arc();
+            self.ytm.write().await.stop(&streams_arc);
+        }
+
+        // 2. Stop audio and KPM capture processes.
+        self.audio.write().await.stop();
+        self.kpm.write().await.stop();
+
+        // 3. Destroy all video streams (kills child processes).
+        self.streams.write().await.destroy_all();
+
+        log::info!("all subsystems stopped");
     }
 }
