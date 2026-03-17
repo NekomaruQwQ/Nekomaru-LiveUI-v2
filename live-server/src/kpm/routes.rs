@@ -25,5 +25,6 @@ async fn get_kpm(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 
     let kpm = kpm_state.calculator.get_kpm();
+    drop(kpm_state);
     Json(serde_json::json!({ "kpm": kpm.round() as i64 })).into_response()
 }

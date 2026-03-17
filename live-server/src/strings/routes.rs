@@ -34,8 +34,7 @@ async fn get_one(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let store = state.strings().await;
-    let all = store.get_all();
+    let all = state.strings().await.get_all();
     match all.get(&key) {
         Some(value) => Json(serde_json::json!({ "value": value })).into_response(),
         None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "not found" }))).into_response(),

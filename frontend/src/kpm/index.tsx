@@ -90,7 +90,7 @@ function useKpm(): KpmState | null {
 /// Map a KPM value to a 0–100 percentage using a power curve.
 function kpmToPercent(kpm: number): number {
     const clamped = Math.min(Math.max(kpm, 0), MAX_KPM);
-    return Math.pow(clamped / MAX_KPM, CURVE_EXPONENT) * 100;
+    return (clamped / MAX_KPM) ** CURVE_EXPONENT * 100;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────

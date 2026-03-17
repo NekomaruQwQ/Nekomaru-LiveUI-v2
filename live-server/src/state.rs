@@ -16,104 +16,104 @@ use tokio::sync::RwLock;
 
 /// Shared state for the entire server.
 pub struct AppState {
-    strings_inner: Arc<RwLock<StringStore>>,
-    streams_inner: Arc<RwLock<StreamRegistry>>,
-    audio_inner: Arc<RwLock<AudioState>>,
-    kpm_inner: Arc<RwLock<KpmState>>,
-    selector_inner: Arc<RwLock<SelectorState>>,
-    ytm_inner: Arc<RwLock<YtmState>>,
+    strings: Arc<RwLock<StringStore>>,
+    streams: Arc<RwLock<StreamRegistry>>,
+    audio: Arc<RwLock<AudioState>>,
+    kpm: Arc<RwLock<KpmState>>,
+    selector: Arc<RwLock<SelectorState>>,
+    ytm: Arc<RwLock<YtmState>>,
 }
 
 impl AppState {
     pub fn new(video_exe_path: String) -> Self {
         Self {
-            strings_inner: Arc::new(RwLock::new(StringStore::new())),
-            streams_inner: Arc::new(RwLock::new(StreamRegistry::new(video_exe_path))),
-            audio_inner: Arc::new(RwLock::new(AudioState::new())),
-            kpm_inner: Arc::new(RwLock::new(KpmState::new())),
-            selector_inner: Arc::new(RwLock::new(SelectorState::new())),
-            ytm_inner: Arc::new(RwLock::new(YtmState::new())),
+            strings: Arc::new(RwLock::new(StringStore::new())),
+            streams: Arc::new(RwLock::new(StreamRegistry::new(video_exe_path))),
+            audio: Arc::new(RwLock::new(AudioState::new())),
+            kpm: Arc::new(RwLock::new(KpmState::new())),
+            selector: Arc::new(RwLock::new(SelectorState::new())),
+            ytm: Arc::new(RwLock::new(YtmState::new())),
         }
     }
 
     // ── Strings ──────────────────────────────────────────────────────────
 
     pub async fn strings(&self) -> tokio::sync::RwLockReadGuard<'_, StringStore> {
-        self.strings_inner.read().await
+        self.strings.read().await
     }
 
     pub async fn strings_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, StringStore> {
-        self.strings_inner.write().await
+        self.strings.write().await
     }
 
     pub fn strings_arc(&self) -> Arc<RwLock<StringStore>> {
-        self.strings_inner.clone()
+        Arc::clone(&self.strings)
     }
 
     // ── Streams ──────────────────────────────────────────────────────────
 
     pub async fn streams(&self) -> tokio::sync::RwLockReadGuard<'_, StreamRegistry> {
-        self.streams_inner.read().await
+        self.streams.read().await
     }
 
     pub async fn streams_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, StreamRegistry> {
-        self.streams_inner.write().await
+        self.streams.write().await
     }
 
     pub fn streams_arc(&self) -> Arc<RwLock<StreamRegistry>> {
-        self.streams_inner.clone()
+        Arc::clone(&self.streams)
     }
 
     // ── Audio ────────────────────────────────────────────────────────────
 
     pub async fn audio(&self) -> tokio::sync::RwLockReadGuard<'_, AudioState> {
-        self.audio_inner.read().await
+        self.audio.read().await
     }
 
     pub async fn audio_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, AudioState> {
-        self.audio_inner.write().await
+        self.audio.write().await
     }
 
     pub fn audio_arc(&self) -> Arc<RwLock<AudioState>> {
-        self.audio_inner.clone()
+        Arc::clone(&self.audio)
     }
 
     // ── KPM ──────────────────────────────────────────────────────────────
 
     pub async fn kpm(&self) -> tokio::sync::RwLockReadGuard<'_, KpmState> {
-        self.kpm_inner.read().await
+        self.kpm.read().await
     }
 
     pub async fn kpm_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, KpmState> {
-        self.kpm_inner.write().await
+        self.kpm.write().await
     }
 
     pub fn kpm_arc(&self) -> Arc<RwLock<KpmState>> {
-        self.kpm_inner.clone()
+        Arc::clone(&self.kpm)
     }
 
     // ── Selector ─────────────────────────────────────────────────────────
 
     pub async fn selector(&self) -> tokio::sync::RwLockReadGuard<'_, SelectorState> {
-        self.selector_inner.read().await
+        self.selector.read().await
     }
 
     pub async fn selector_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, SelectorState> {
-        self.selector_inner.write().await
+        self.selector.write().await
     }
 
     pub fn selector_arc(&self) -> Arc<RwLock<SelectorState>> {
-        self.selector_inner.clone()
+        Arc::clone(&self.selector)
     }
 
     // ── YTM ──────────────────────────────────────────────────────────────
 
     pub async fn ytm_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, YtmState> {
-        self.ytm_inner.write().await
+        self.ytm.write().await
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "API completeness — no YTM routes yet")]
     pub fn ytm_arc(&self) -> Arc<RwLock<YtmState>> {
-        self.ytm_inner.clone()
+        Arc::clone(&self.ytm)
     }
 }

@@ -23,15 +23,14 @@ const YTM_TITLE: &str = "YouTube Music - Nekomaru LiveUI v2";
 
 // ── YTM State ────────────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
 pub struct YtmState {
     pub active: bool,
     pub last_known_hwnd: Option<String>,
-    poll_handle: Option<JoinHandle<()>>,
+    pub poll_handle: Option<JoinHandle<()>>,
 }
 
 impl YtmState {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { active: false, last_known_hwnd: None, poll_handle: None }
     }
 
@@ -39,11 +38,11 @@ impl YtmState {
         if self.active { return; }
         self.active = true;
 
-        let streams = streams_arc.clone();
+        let streams = Arc::clone(streams_arc);
 
         // Shared hwnd state between poll iterations.
         let last_hwnd: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
-        let last_hwnd_clone = last_hwnd.clone();
+        let last_hwnd_clone = last_hwnd;
 
         self.poll_handle = Some(tokio::spawn(async move {
             // Immediate first poll.
@@ -61,7 +60,7 @@ impl YtmState {
         log::info!("[ytm] started");
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "symmetric with start() — will be used when YTM routes are added")]
     pub fn stop(&mut self, streams_arc: &Arc<RwLock<StreamRegistry>>) {
         if !self.active { return; }
 
@@ -72,7 +71,7 @@ impl YtmState {
         self.active = false;
         self.last_known_hwnd = None;
 
-        let streams = streams_arc.clone();
+        let streams = Arc::clone(streams_arc);
         tokio::spawn(async move {
             streams.write().await.destroy_stream(STREAM_ID);
         });
@@ -125,8 +124,9 @@ async fn poll_once(
 
         {
             let mut streams = streams_arc.write().await;
+            let crop = crate::video::process::CropParams { min_x: 0, min_y, max_x, max_y };
             streams.replace_crop_stream(
-                STREAM_ID, &hwnd_str, 0, min_y, max_x, max_y, Some(2), streams_arc);
+                STREAM_ID, &hwnd_str, &crop, Some(2), streams_arc);
         }
 
         *last_hwnd.write().await = Some(hwnd_str);

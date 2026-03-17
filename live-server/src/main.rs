@@ -162,8 +162,8 @@ fn resolve_sibling_exe(name: &str) -> String {
     }
 
     // Bare name: look next to this binary.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
             let candidate = dir.join(name);
             // On Windows, try with .exe suffix.
             let with_ext = candidate.with_extension("exe");
@@ -174,7 +174,6 @@ fn resolve_sibling_exe(name: &str) -> String {
                 return candidate.to_string_lossy().into_owned();
             }
         }
-    }
 
     // Fallback: hope it's on PATH.
     name.to_owned()

@@ -48,6 +48,7 @@ async fn stop_selector(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     let streams_arc = state.streams_arc();
     let strings_arc = state.strings_arc();
     sel.stop(&streams_arc, &strings_arc);
+    drop(sel);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -68,6 +69,7 @@ async fn set_config(
     sel.config.save();
     log::info!("[selector] config updated: preset=\"{}\", {} preset(s)",
         sel.config.preset, sel.config.presets.len());
+    drop(sel);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -89,9 +91,10 @@ async fn set_preset(
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": format!("preset \"{name}\" not found") }))).into_response();
     }
 
-    sel.config.preset = name.clone();
+    name.clone_into(&mut sel.config.preset);
     sel.config.save();
     log::info!("[selector] switched to preset \"{name}\"");
+    drop(sel);
 
     Json(serde_json::json!({ "ok": true })).into_response()
 }

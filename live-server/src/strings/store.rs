@@ -7,7 +7,7 @@
 //! Computed strings (`$`-prefixed) are server-derived, readonly, in-memory only.
 //! They are merged into GET responses but cannot be written or deleted via the API.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -25,9 +25,9 @@ fn strings_dir_path() -> PathBuf { Path::new(DATA_DIR).join("strings") }
 
 pub struct StringStore {
     /// User-managed key-value pairs, persisted to disk.
-    user: HashMap<String, String>,
+    user: BTreeMap<String, String>,
     /// Server-derived readonly strings (`$`-prefixed), in-memory only.
-    computed: HashMap<String, String>,
+    computed: BTreeMap<String, String>,
 }
 
 impl StringStore {
@@ -36,15 +36,15 @@ impl StringStore {
         let _ = std::fs::create_dir_all(strings_dir_path());
 
         let mut store = Self {
-            user: HashMap::new(),
-            computed: HashMap::new(),
+            user: BTreeMap::new(),
+            computed: BTreeMap::new(),
         };
         store.load_from_disk();
         store
     }
 
     /// All entries merged: user store + computed (computed wins on conflict).
-    pub fn get_all(&self) -> HashMap<String, String> {
+    pub fn get_all(&self) -> BTreeMap<String, String> {
         let mut result = self.user.clone();
         for (k, v) in &self.computed {
             result.insert(k.clone(), v.clone());
@@ -112,10 +112,8 @@ impl StringStore {
     /// Load user strings from both disk layers.
     fn load_from_disk(&mut self) {
         // Layer 1: strings.json (lower priority).
-        if let Ok(json) = load_json_map(&strings_json_path()) {
-            for (k, v) in json {
-                self.user.insert(k, v);
-            }
+        for (k, v) in load_json_map(&strings_json_path()) {
+            self.user.insert(k, v);
         }
 
         // Layer 2: data/strings/*.md (higher priority, overwrites JSON).
@@ -123,13 +121,11 @@ impl StringStore {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if let Some(key) = name.strip_suffix(".md") {
-                    if is_valid_key(key) {
-                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                if let Some(key) = name.strip_suffix(".md")
+                    && is_valid_key(key)
+                        && let Ok(content) = std::fs::read_to_string(entry.path()) {
                             self.user.insert(key.to_owned(), content);
                         }
-                    }
-                }
             }
         }
 
@@ -155,19 +151,19 @@ fn is_valid_key(key: &str) -> bool {
 /// A value is multiline if it contains a newline after trimming trailing whitespace.
 fn is_multiline(value: &str) -> bool { value.trim_end().contains('\n') }
 
-/// Load strings.json as a `HashMap`.  Returns empty map on missing/corrupt file.
-fn load_json_map(path: &Path) -> Result<HashMap<String, String>, ()> {
-    let content = std::fs::read_to_string(path).map_err(|_| ())?;
-    serde_json::from_str(&content).map_err(|e| {
-        // Crash on corrupt config (matches TS behavior: strict mode).
-        panic!("corrupt strings.json: {e}");
-    })
+/// Load strings.json as a `BTreeMap`.  Returns empty map on missing file.
+///
+/// Panics on corrupt JSON (strict mode, matches TS behavior).
+fn load_json_map(path: &Path) -> BTreeMap<String, String> {
+    let Ok(content) = std::fs::read_to_string(path) else { return BTreeMap::new() };
+    serde_json::from_str(&content)
+        .unwrap_or_else(|e| panic!("corrupt strings.json: {e}"))
 }
 
 /// Update a single key in strings.json (load → set → save).
 fn save_to_json(key: &str, value: &str) {
     let path = strings_json_path();
-    let mut map: HashMap<String, String> = std::fs::read_to_string(&path)
+    let mut map: BTreeMap<String, String> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
@@ -180,7 +176,7 @@ fn save_to_json(key: &str, value: &str) {
 fn remove_from_json(key: &str) {
     let path = strings_json_path();
     let Ok(content) = std::fs::read_to_string(&path) else { return };
-    let Ok(mut map): Result<HashMap<String, String>, _> = serde_json::from_str(&content) else { return };
+    let Ok(mut map): Result<BTreeMap<String, String>, _> = serde_json::from_str(&content) else { return };
     if map.remove(key).is_some() {
         let json = serde_json::to_string_pretty(&map).expect("JSON serialization failed");
         let _ = std::fs::write(path, json);

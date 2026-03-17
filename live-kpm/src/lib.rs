@@ -53,8 +53,8 @@ pub fn read_batch(r: &mut impl Read) -> io::Result<Option<Batch>> {
         Err(e) => return Err(e),
     }
 
-    let t = u64::from_le_bytes(buf[0..8].try_into().unwrap());
-    let c = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+    let t = u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]);
+    let c = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
 
     Ok(Some(Batch { t, c }))
 }

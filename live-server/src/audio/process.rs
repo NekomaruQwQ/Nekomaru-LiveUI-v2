@@ -22,8 +22,8 @@ const AUDIO_BUFFER_CAPACITY: usize = 100;
 pub struct AudioState {
     pub buffer: AudioBuffer,
     pub active: bool,
-    child: Option<Child>,
-    reader_handle: Option<JoinHandle<()>>,
+    pub child: Option<Child>,
+    pub reader_handle: Option<JoinHandle<()>>,
 }
 
 impl AudioState {
@@ -45,11 +45,9 @@ impl AudioState {
     ) {
         if self.active { return; }
 
-        let args = vec![
-            exe_path.to_owned(),
+        let args = [exe_path.to_owned(),
             "--device".into(),
-            device_name.to_owned(),
-        ];
+            device_name.to_owned()];
 
         let mut child = Command::new(&args[0])
             .args(&args[1..])
@@ -61,7 +59,7 @@ impl AudioState {
         let stdout = child.stdout.take().expect("stdout must be piped");
         let stderr = child.stderr.take().expect("stderr must be piped");
 
-        let state_clone = state_arc.clone();
+        let state_clone = Arc::clone(state_arc);
 
         // Stdout reader task.
         let reader_handle = tokio::task::spawn_blocking(move || {
@@ -105,7 +103,7 @@ impl AudioState {
 
         // Stderr reader task.
         tokio::task::spawn_blocking(move || {
-            use std::io::BufRead;
+            use std::io::BufRead as _;
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 match line {

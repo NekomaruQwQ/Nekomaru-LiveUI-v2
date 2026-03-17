@@ -31,7 +31,7 @@ pub struct SelectorState {
     pub last_capture_hwnd: Option<String>,
     pub last_capture_title: Option<String>,
     pub config: PresetConfig,
-    poll_handle: Option<JoinHandle<()>>,
+    pub poll_handle: Option<JoinHandle<()>>,
 }
 
 /// Serializable status for the API.
@@ -61,7 +61,7 @@ impl SelectorState {
     pub fn status(&self) -> SelectorStatus {
         SelectorStatus {
             active: self.active,
-            current_stream_id: if self.active { Some(STREAM_ID.into()) } else { None },
+            current_stream_id: self.active.then(|| STREAM_ID.into()),
             current_hwnd: self.last_capture_hwnd.clone(),
             current_title: self.last_capture_title.clone(),
         }
@@ -80,15 +80,15 @@ impl SelectorState {
 
         // Set $captureMode computed string.
         {
-            let strings = strings_arc.clone();
+            let strings = Arc::clone(strings_arc);
             tokio::spawn(async move {
                 strings.write().await.set_computed("$captureMode", "auto".into());
             });
         }
 
-        let selector = selector_arc.clone();
-        let streams = streams_arc.clone();
-        let strings = strings_arc.clone();
+        let selector = Arc::clone(selector_arc);
+        let streams = Arc::clone(streams_arc);
+        let strings = Arc::clone(strings_arc);
 
         self.poll_handle = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(
@@ -120,8 +120,8 @@ impl SelectorState {
         self.last_capture_title = None;
 
         // Destroy the managed stream.
-        let streams = streams_arc.clone();
-        let strings = strings_arc.clone();
+        let streams = Arc::clone(streams_arc);
+        let strings = Arc::clone(strings_arc);
         tokio::spawn(async move {
             streams.write().await.destroy_stream(STREAM_ID);
             let mut s = strings.write().await;
@@ -185,8 +185,7 @@ async fn poll_once(
     let Some(patterns) = patterns else { return };
 
     let exe_path = info.executable_path.to_string_lossy().to_string();
-    let result = should_capture(&patterns, &exe_path, &info.title);
-    let Some(mode) = result else { return };
+    let Some(capture_match) = should_capture(&patterns, &exe_path, &info.title) else { return };
 
     // Already capturing this window.
     if selector.last_capture_hwnd.as_deref() == Some(&hwnd_str) { return; }
@@ -199,12 +198,13 @@ async fn poll_once(
 
     selector.last_capture_hwnd = Some(hwnd_str.clone());
     selector.last_capture_title = Some(info.title.clone());
+    drop(selector);
 
     // Update computed strings.
     {
         let mut strings = strings_arc.write().await;
         strings.set_computed("$captureWindowTitle", info.title);
-        match mode {
+        match capture_match.mode {
             Some(m) => strings.set_computed("$liveMode", m),
             None => strings.clear_computed("$liveMode"),
         }

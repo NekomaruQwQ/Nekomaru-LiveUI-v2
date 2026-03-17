@@ -3,7 +3,7 @@
 //! Simpler than the video buffer — no keyframe gating needed because every
 //! PCM chunk is independently decodable.  Chunks are pre-serialized on push.
 //!
-//! Pre-serialized payload: `[u64 LE: timestamp_us][raw PCM s16le bytes]`
+//! Pre-serialized payload: `[u64 LE: timestamp_us][raw PCM s16le bytes]`.
 
 use live_audio::{AudioFrame, AudioParams};
 
@@ -39,11 +39,11 @@ impl AudioBuffer {
         }
     }
 
-    pub fn set_audio_params(&mut self, params: AudioParams) {
+    pub const fn set_audio_params(&mut self, params: AudioParams) {
         self.audio_params = Some(params);
     }
 
-    pub fn get_audio_params(&self) -> Option<&AudioParams> {
+    pub const fn get_audio_params(&self) -> Option<&AudioParams> {
         self.audio_params.as_ref()
     }
 
@@ -87,7 +87,7 @@ impl AudioBuffer {
         for i in 0..self.count {
             let raw_idx = start.wrapping_add(i);
             let idx = raw_idx % self.capacity;
-            let Some(chunk) = &self.chunks[idx] else { continue };
+            let &Some(ref chunk) = &self.chunks[idx] else { continue };
             if chunk.sequence <= after_sequence { continue; }
             result.push(chunk);
         }

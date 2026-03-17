@@ -10,6 +10,7 @@ use live_video::Message;
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -37,9 +38,9 @@ pub struct CaptureStream {
     /// Bumped each time the underlying capture process is replaced.
     pub generation: u32,
     /// Handle to the child process.
-    child: Option<Child>,
+    pub child: Option<Child>,
     /// Abort handle for the stdout reader task.
-    reader_handle: Option<JoinHandle<()>>,
+    pub reader_handle: Option<JoinHandle<()>>,
 }
 
 impl CaptureStream {
@@ -71,7 +72,7 @@ impl Drop for CaptureStream {
 pub struct StreamRegistry {
     pub streams: HashMap<String, CaptureStream>,
     /// Path to the `live-video.exe` binary.
-    exe_path: String,
+    pub exe_path: String,
 }
 
 impl StreamRegistry {
@@ -115,8 +116,7 @@ impl StreamRegistry {
     pub fn create_crop_stream(
         &mut self,
         hwnd: &str,
-        min_x: u32, min_y: u32,
-        max_x: u32, max_y: u32,
+        crop: &CropParams,
         fps: Option<u32>,
         registry: &std::sync::Arc<RwLock<Self>>,
     ) -> String {
@@ -124,10 +124,10 @@ impl StreamRegistry {
         let mut args = vec![
             self.exe_path.clone(),
             "--hwnd".into(), hwnd.into(),
-            "--crop-min-x".into(), min_x.to_string(),
-            "--crop-min-y".into(), min_y.to_string(),
-            "--crop-max-x".into(), max_x.to_string(),
-            "--crop-max-y".into(), max_y.to_string(),
+            "--crop-min-x".into(), crop.min_x.to_string(),
+            "--crop-min-y".into(), crop.min_y.to_string(),
+            "--crop-max-x".into(), crop.max_x.to_string(),
+            "--crop-max-y".into(), crop.max_y.to_string(),
         ];
         if let Some(fps) = fps {
             args.push("--fps".into());
@@ -161,18 +161,17 @@ impl StreamRegistry {
         &mut self,
         id: &str,
         hwnd: &str,
-        min_x: u32, min_y: u32,
-        max_x: u32, max_y: u32,
+        crop: &CropParams,
         fps: Option<u32>,
         registry: &std::sync::Arc<RwLock<Self>>,
     ) {
         let mut args = vec![
             self.exe_path.clone(),
             "--hwnd".into(), hwnd.into(),
-            "--crop-min-x".into(), min_x.to_string(),
-            "--crop-min-y".into(), min_y.to_string(),
-            "--crop-max-x".into(), max_x.to_string(),
-            "--crop-max-y".into(), max_y.to_string(),
+            "--crop-min-x".into(), crop.min_x.to_string(),
+            "--crop-min-y".into(), crop.min_y.to_string(),
+            "--crop-max-x".into(), crop.max_x.to_string(),
+            "--crop-max-y".into(), crop.max_y.to_string(),
         ];
         if let Some(fps) = fps {
             args.push("--fps".into());
@@ -190,7 +189,7 @@ impl StreamRegistry {
     }
 
     /// Kill all child processes.  Called on server shutdown.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "shutdown cleanup — called externally")]
     pub fn destroy_all(&mut self) {
         let ids: Vec<_> = self.streams.keys().cloned().collect();
         for id in ids {
@@ -209,7 +208,7 @@ impl StreamRegistry {
     ) {
         if let Some(stream) = self.streams.get_mut(id) {
             stream.kill();
-            stream.hwnd = hwnd.to_owned();
+            hwnd.clone_into(&mut stream.hwnd);
             stream.status = StreamStatus::Starting;
             stream.buffer.reset();
             stream.generation += 1;
@@ -249,6 +248,14 @@ impl StreamRegistry {
     }
 }
 
+/// Crop region parameters for crop-mode capture.
+pub struct CropParams {
+    pub min_x: u32,
+    pub min_y: u32,
+    pub max_x: u32,
+    pub max_y: u32,
+}
+
 /// Serializable stream info for the list endpoint.
 #[derive(serde::Serialize)]
 pub struct StreamInfo {
@@ -282,7 +289,7 @@ fn spawn_and_wire(
     let stderr = child.stderr.take().expect("stderr must be piped");
 
     let id_owned = id.to_owned();
-    let registry_clone = registry.clone();
+    let registry_clone = Arc::clone(registry);
 
     // Stdout reader: blocking read_message() on a dedicated thread.
     // Uses blocking_write() to push frames — hold time is microseconds per
@@ -333,7 +340,7 @@ fn spawn_and_wire(
     // Stderr reader: forward lines to log.
     let id_for_stderr = id.to_owned();
     tokio::task::spawn_blocking(move || {
-        use std::io::BufRead;
+        use std::io::BufRead as _;
         let reader = BufReader::new(stderr);
         for line in reader.lines() {
             match line {

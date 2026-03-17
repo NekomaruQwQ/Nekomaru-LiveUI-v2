@@ -71,18 +71,18 @@ impl PresetConfig {
                 if let Some(arr) = value.as_array() {
                     // Modern format: flat string array.
                     let entries: Vec<String> = arr.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_owned()))
+                        .filter_map(|v| v.as_str().map(std::borrow::ToOwned::to_owned))
                         .collect();
                     presets.insert(name.clone(), entries);
                 } else if let Some(legacy) = value.as_object() {
                     // Legacy format: { include: [...], exclude: [...] }
                     let include = legacy.get("include")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_owned())).collect::<Vec<_>>())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(std::borrow::ToOwned::to_owned)).collect::<Vec<_>>())
                         .unwrap_or_default();
                     let exclude = legacy.get("exclude")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_owned())).collect::<Vec<_>>())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(std::borrow::ToOwned::to_owned)).collect::<Vec<_>>())
                         .unwrap_or_default();
                     let mut entries = include;
                     for e in exclude {
@@ -90,7 +90,7 @@ impl PresetConfig {
                     }
                     log::info!("migrated legacy preset \"{name}\" to flat format");
                     presets.insert(name.clone(), entries);
-                }
+                } else {}
             }
         }
 
@@ -124,19 +124,18 @@ pub struct ParsedPattern {
 
 /// Parse a config string with optional `@mode ` prefix and
 /// `<exePath>[@<windowTitle>]` body.
+#[expect(clippy::string_slice, reason = "indices from str::find() are guaranteed valid UTF-8 boundaries")]
 pub fn parse_pattern(pattern: &str) -> ParsedPattern {
     let mut mode: Option<String> = None;
     let mut body = pattern;
 
     // Extract leading `@mode ` prefix (distinguished from `@title` by the space).
-    if body.starts_with('@') {
-        if let Some(space_idx) = body.find(' ') {
-            if space_idx > 1 {
+    if body.starts_with('@')
+        && let Some(space_idx) = body.find(' ')
+            && space_idx > 1 {
                 mode = Some(body[1..space_idx].to_owned());
                 body = &body[space_idx + 1..];
             }
-        }
-    }
 
     let (exe_path, title) = match body.find('@') {
         Some(idx) => (body[..idx].to_owned(), Some(body[idx + 1..].to_owned())),
@@ -171,44 +170,49 @@ pub fn matches_parsed(
     }
 
     // Check title part.
-    if let Some(ref title_pattern) = parsed.title {
-        if !title_pattern.is_empty()
+    if let Some(ref title_pattern) = parsed.title
+        && !title_pattern.is_empty()
             && !window_title.to_lowercase().contains(&title_pattern.to_lowercase())
         {
             return false;
         }
-    }
 
     true
+}
+
+/// Result of pattern matching: whether to capture, and the mode tag if any.
+pub struct CaptureMatch {
+    /// Mode tag from the matched include pattern (e.g. `"code"`, `"game"`).
+    /// `None` if the pattern has no `@mode` prefix.
+    pub mode: Option<String>,
 }
 
 /// Determine whether a window should be captured based on the active preset.
 ///
 /// Returns `None` if the window should not be captured.
-/// Returns `Some(mode)` with the mode tag from the first matching include
-/// entry (which may itself be `None` if the pattern has no `@mode` prefix).
+/// Returns `Some(CaptureMatch)` with the mode tag from the first matching
+/// include entry.
 pub fn should_capture(
     patterns: &[String],
     executable_path: &str,
     title: &str,
-) -> Option<Option<String>> {
-    let mut matched_mode: Option<String> = None;
-    let mut included = false;
+) -> Option<CaptureMatch> {
+    let mut result: Option<CaptureMatch> = None;
 
     for raw in patterns {
         let parsed = parse_pattern(raw);
         if parsed.mode.as_deref() == Some("exclude") {
-            // Exclude entries use case-insensitive exe-path matching.
             if matches_parsed(&parsed, executable_path, title, true) {
                 return None;
             }
-        } else if !included && matches_parsed(&parsed, executable_path, title, false) {
-            included = true;
-            matched_mode = parsed.mode;
+        } else if result.is_none() && matches_parsed(&parsed, executable_path, title, false) {
+            result = Some(CaptureMatch { mode: parsed.mode });
+        } else {
+            // Already matched or doesn't match — skip.
         }
     }
 
-    if included { Some(matched_mode) } else { None }
+    result
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -277,7 +281,8 @@ mod tests {
 
         // devenv matches include.
         let result = should_capture(&patterns, "C:\\devenv.exe", "Test");
-        assert_eq!(result, Some(Some("code".into())));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().mode, Some("code".into()));
 
         // gogh matches exclude — vetoed.
         let result = should_capture(&patterns, "C:\\gogh.exe", "Test");

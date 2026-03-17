@@ -16,7 +16,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::Deserialize;
 
-use std::io::Write;
+use std::io::Write as _;
 use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -36,10 +36,15 @@ async fn get_init(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "audio params not yet available" }))).into_response();
     };
 
+    let sample_rate = params.sample_rate;
+    let channels = params.channels;
+    let bits_per_sample = params.bits_per_sample;
+    drop(audio);
+
     Json(serde_json::json!({
-        "sampleRate": params.sample_rate,
-        "channels": params.channels,
-        "bitsPerSample": params.bits_per_sample,
+        "sampleRate": sample_rate,
+        "channels": channels,
+        "bitsPerSample": bits_per_sample,
     })).into_response()
 }
 
@@ -58,47 +63,52 @@ struct ChunksQuery {
 /// per chunk: [u32: sequence][u32: payload_length][payload bytes]
 /// ```
 ///
-/// Payload per chunk: `[u64 LE: timestamp_us][delta-encoded s16le PCM]`
+/// Payload per chunk: `[u64 LE: timestamp_us][delta-encoded s16le PCM]`.
 async fn get_chunks(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ChunksQuery>,
 ) -> impl IntoResponse {
-    let audio = state.audio().await;
     let after: u32 = query.after
         .as_deref()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
-    let chunks = audio.buffer.get_chunks_after(after);
+    // Collect chunk data and drop the lock before serialization.
+    let audio = state.audio().await;
+    let chunk_data: Vec<(u32, Vec<u8>)> = audio.buffer.get_chunks_after(after)
+        .iter()
+        .map(|ch| (ch.sequence, ch.payload.clone()))
+        .collect();
+    drop(audio);
 
     // Pre-compute total size: 4-byte header + (8 + payload) per chunk.
     let mut total_size: usize = 4;
-    for ch in &chunks {
-        total_size += 8 + ch.payload.len();
+    for &(_, ref payload) in &chunk_data {
+        total_size += 8 + payload.len();
     }
 
     let mut buf = vec![0u8; total_size];
     let mut pos = 0;
 
     // Header: chunk count.
-    buf[pos..pos + 4].copy_from_slice(&(chunks.len() as u32).to_le_bytes());
+    buf[pos..pos + 4].copy_from_slice(&(chunk_data.len() as u32).to_le_bytes());
     pos += 4;
 
     // Each chunk: sequence + payload length + delta-encoded payload.
-    for ch in &chunks {
-        buf[pos..pos + 4].copy_from_slice(&ch.sequence.to_le_bytes());
+    for &(sequence, ref payload) in &chunk_data {
+        buf[pos..pos + 4].copy_from_slice(&sequence.to_le_bytes());
         pos += 4;
-        buf[pos..pos + 4].copy_from_slice(&(ch.payload.len() as u32).to_le_bytes());
+        buf[pos..pos + 4].copy_from_slice(&(payload.len() as u32).to_le_bytes());
         pos += 4;
 
         // Copy payload into the response buffer.
-        buf[pos..pos + ch.payload.len()].copy_from_slice(&ch.payload);
+        buf[pos..pos + payload.len()].copy_from_slice(payload);
 
         // Delta-encode the PCM region in-place on the copy.
         // Payload layout: [u64 timestamp (8 bytes)][s16le PCM samples...].
-        delta_encode_pcm(&mut buf, pos + 8, ch.payload.len() - 8);
+        delta_encode_pcm(&mut buf, pos + 8, payload.len() - 8);
 
-        pos += ch.payload.len();
+        pos += payload.len();
     }
 
     // Gzip compress the entire response.

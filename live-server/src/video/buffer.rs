@@ -62,7 +62,7 @@ impl StreamBuffer {
 
     /// Return the cached codec params, or `None` if the encoder hasn't
     /// produced its first IDR frame yet.
-    pub fn get_codec_params(&self) -> Option<&CodecParams> {
+    pub const fn get_codec_params(&self) -> Option<&CodecParams> {
         self.codec_params.as_ref()
     }
 
@@ -111,7 +111,7 @@ impl StreamBuffer {
             let raw_idx = start.wrapping_add(i);
             let idx = raw_idx % self.capacity;
 
-            let Some(frame) = &self.frames[idx] else { continue };
+            let &Some(ref frame) = &self.frames[idx] else { continue };
             if frame.sequence <= after_sequence { continue; }
 
             if need_keyframe {

@@ -25,7 +25,7 @@ impl KpmCalculator {
     ///
     /// - `window_ms`: sliding window duration (e.g. 5000ms).
     /// - `batch_ms`: batch interval (e.g. 50ms) — used to size the buffer.
-    pub fn new(window_ms: u64, batch_ms: u64) -> Self {
+    pub const fn new(window_ms: u64, batch_ms: u64) -> Self {
         Self {
             entries: VecDeque::new(),
             window_us: window_ms * 1000,

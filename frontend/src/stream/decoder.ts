@@ -1,5 +1,4 @@
 import { DEBUG } from "../../debug";
-import { api } from "../api";
 
 export interface NALUnitData {
     type: number;
@@ -36,11 +35,9 @@ async function fetchInit(streamId: string): Promise<InitParams> {
     const baseDelayMs = 250;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-        const res = await api[":id"].init.$get({ param: { id: streamId } });
+        const res = await fetch(`/api/v1/streams/${streamId}/init`);
 
         if (res.ok) {
-            // Narrow from the union of all possible response types to the
-            // success case — safe because we've confirmed res.ok (status 200).
             return await res.json() as InitParams;
         }
 

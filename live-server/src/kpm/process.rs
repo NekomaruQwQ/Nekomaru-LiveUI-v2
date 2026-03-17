@@ -23,12 +23,12 @@ const WINDOW_DURATION_MS: u64 = 5000;
 pub struct KpmState {
     pub calculator: KpmCalculator,
     pub active: bool,
-    child: Option<Child>,
-    reader_handle: Option<JoinHandle<()>>,
+    pub child: Option<Child>,
+    pub reader_handle: Option<JoinHandle<()>>,
 }
 
 impl KpmState {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             calculator: KpmCalculator::new(WINDOW_DURATION_MS, BATCH_INTERVAL_MS),
             active: false,
@@ -52,7 +52,7 @@ impl KpmState {
         let stdout = child.stdout.take().expect("stdout must be piped");
         let stderr = child.stderr.take().expect("stderr must be piped");
 
-        let state_clone = state_arc.clone();
+        let state_clone = Arc::clone(state_arc);
 
         // Stdout reader: reads fixed 12-byte binary batches.
         let reader_handle = tokio::task::spawn_blocking(move || {
@@ -82,7 +82,7 @@ impl KpmState {
 
         // Stderr reader.
         tokio::task::spawn_blocking(move || {
-            use std::io::BufRead;
+            use std::io::BufRead as _;
             let reader = BufReader::new(stderr);
             for line in reader.lines() {
                 match line {

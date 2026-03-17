@@ -7,6 +7,7 @@
 //! - `GET    /api/v1/streams/:id/frames` — encoded frames (binary, polling)
 
 use crate::state::AppState;
+use crate::video::process::CropParams;
 
 use axum::Router;
 use axum::body::Body;
@@ -64,9 +65,12 @@ async fn create_stream(
     let id = match body {
         CreateBody::Resample { hwnd, width, height } =>
             registry.create_stream(&hwnd, width, height, &arc),
-        CreateBody::Crop { hwnd, crop_min_x, crop_min_y, crop_max_x, crop_max_y } =>
-            registry.create_crop_stream(&hwnd, crop_min_x, crop_min_y, crop_max_x, crop_max_y, None, &arc),
+        CreateBody::Crop { hwnd, crop_min_x, crop_min_y, crop_max_x, crop_max_y } => {
+            let crop = CropParams { min_x: crop_min_x, min_y: crop_min_y, max_x: crop_max_x, max_y: crop_max_y };
+            registry.create_crop_stream(&hwnd, &crop, None, &arc)
+        }
     };
+    drop(registry);
 
     (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
 }
@@ -82,6 +86,7 @@ async fn destroy_stream(
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "stream not found" }))).into_response();
     }
     registry.destroy_stream(&id);
+    drop(registry);
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 
@@ -100,12 +105,18 @@ async fn get_init(
         return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "codec params not yet available" }))).into_response();
     };
 
+    let sps = params.sps.clone();
+    let pps = params.pps.clone();
+    let width = params.width;
+    let height = params.height;
+    drop(registry);
+
     let b64 = base64::engine::general_purpose::STANDARD;
     Json(serde_json::json!({
-        "sps": b64.encode(&params.sps),
-        "pps": b64.encode(&params.pps),
-        "width": params.width,
-        "height": params.height,
+        "sps": b64.encode(&sps),
+        "pps": b64.encode(&pps),
+        "width": width,
+        "height": height,
     })).into_response()
 }
 
@@ -139,6 +150,7 @@ async fn get_frames(
         .unwrap_or(0);
 
     let frames = stream.buffer.get_frames_after(after);
+    let generation = stream.generation;
 
     // Pre-compute total size: 8-byte header + (8 + payload) per frame.
     let mut total_size: usize = 8;
@@ -150,7 +162,7 @@ async fn get_frames(
     let mut pos = 0;
 
     // Header: generation + frame count.
-    buf[pos..pos + 4].copy_from_slice(&stream.generation.to_le_bytes());
+    buf[pos..pos + 4].copy_from_slice(&generation.to_le_bytes());
     pos += 4;
     buf[pos..pos + 4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
     pos += 4;
@@ -164,6 +176,8 @@ async fn get_frames(
         buf[pos..pos + f.payload.len()].copy_from_slice(&f.payload);
         pos += f.payload.len();
     }
+
+    drop(registry);
 
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
