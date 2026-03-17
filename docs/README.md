@@ -543,6 +543,7 @@ Replaces the former TypeScript Hono server.  All server logic is now Rust.  Modu
 | Component | File(s) | Status | Notes |
 |-----------|---------|--------|-------|
 | **Entry Point** | `live-server/src/main.rs` | Done | Axum HTTP server. Per-monitor DPI aware via `set-dpi-awareness` crate. CLI args via clap (port, exe paths, audio device/enable). Auto-starts selector, YTM manager, KPM on boot. Audio gated by `--audio` / `LIVE_AUDIO` env. Spawns Vite dev server as child when `LIVE_PORT` is set. Resolves sibling executables from cargo build output. |
+| **Constants** | `live-server/src/constant.rs` | Done | Centralized well-known values: data paths, stream IDs (`STREAM_ID_MAIN`, `STREAM_ID_YTM`), computed string keys (`CSID_*`), capture defaults, buffer capacities, poll intervals, YTM crop geometry (`ytm_crop_geometry()`), default selector config (`default_selector_config()` via `json!`). |
 | **Shared State** | `live-server/src/state.rs` | Done | `AppState` with per-subsystem `Arc<RwLock<T>>`. Accessor methods for read/write locks and cloneable `Arc` handles for child-process reader tasks. |
 | **Video Buffer** | `live-server/src/video/buffer.rs` | Done | Per-stream circular buffer (60 frames). Pre-serializes frames on push. Keyframe gating for first client request (WebCodecs decoder needs IDR to initialize). `reset()` on stream replacement. 6 unit tests. |
 | **Video Process** | `live-server/src/video/process.rs` | Done | `StreamRegistry` with `CaptureStream` entries. `spawn_and_wire()` spawns `live-video.exe` with `--stream-id`, reads stdout via `live_video::read_message()` on `spawn_blocking` thread, pushes into buffer. `create_stream()` / `create_crop_stream()` for manual use. `replace_stream()` / `replace_crop_stream()` for well-known IDs — kill old, reset buffer, bump generation (idempotent). Stderr inherited (child tags its own log lines via `--stream-id`). |
@@ -690,6 +691,7 @@ Nekomaru-LiveUI-v2/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs                  # Entry point: Axum, CLI args, Vite child, signal handling
+│       ├── constant.rs              # Centralized constants, well-known IDs, computed string keys
 │       ├── state.rs                 # AppState (Arc<RwLock<...>> per subsystem)
 │       ├── video/                   # Video capture pipeline
 │       │   ├── buffer.rs            # Circular frame buffer (keyframe gating, pre-serialization)

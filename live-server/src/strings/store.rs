@@ -10,10 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-/// Directory for persisted runtime data.
-const DATA_DIR: &str = "data";
+use crate::constant::DATA_DIR;
 
 /// Path to the JSON string store file.
 fn strings_json_path() -> PathBuf { Path::new(DATA_DIR).join("strings.json") }

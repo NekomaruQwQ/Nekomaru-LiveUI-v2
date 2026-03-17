@@ -10,6 +10,7 @@
 //! LIVE_CORE_PORT=3000 LIVE_PORT=5173 live-server
 //! ```
 
+mod constant;
 mod state;
 mod windows;
 

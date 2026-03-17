@@ -15,8 +15,7 @@ use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-/// Buffer capacity: 100 chunks = ~1 second at 10ms/chunk.
-const AUDIO_BUFFER_CAPACITY: usize = 100;
+use crate::constant::AUDIO_BUFFER_CAPACITY;
 
 // ── AudioState ───────────────────────────────────────────────────────────────
 

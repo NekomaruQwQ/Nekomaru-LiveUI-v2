@@ -5,6 +5,11 @@
 //! When the foreground matches the active preset and differs from the
 //! current capture target, replaces the "main" stream in-place.
 
+use crate::constant::{
+    CSID_CAPTURE_MODE, CSID_CAPTURE_WINDOW_TITLE, CSID_LIVE_MODE,
+    DEFAULT_CAPTURE_HEIGHT, DEFAULT_CAPTURE_WIDTH,
+    SELECTOR_POLL_INTERVAL_MS, STREAM_ID_MAIN,
+};
 use crate::selector::config::{PresetConfig, should_capture};
 use crate::strings::store::StringStore;
 use crate::video::process::StreamRegistry;
@@ -13,16 +18,6 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-
-/// Well-known stream ID managed by the selector.
-const STREAM_ID: &str = "main";
-
-/// Poll interval (milliseconds).
-const POLL_INTERVAL_MS: u64 = 2000;
-
-/// Default capture resolution.
-const DEFAULT_WIDTH: u32 = 1920;
-const DEFAULT_HEIGHT: u32 = 1200;
 
 // ── Selector State ───────────────────────────────────────────────────────────
 
@@ -61,7 +56,7 @@ impl SelectorState {
     pub fn status(&self) -> SelectorStatus {
         SelectorStatus {
             active: self.active,
-            current_stream_id: self.active.then(|| STREAM_ID.into()),
+            current_stream_id: self.active.then(|| STREAM_ID_MAIN.into()),
             current_hwnd: self.last_capture_hwnd.clone(),
             current_title: self.last_capture_title.clone(),
         }
@@ -82,7 +77,7 @@ impl SelectorState {
         {
             let strings = Arc::clone(strings_arc);
             tokio::spawn(async move {
-                strings.write().await.set_computed("$captureMode", "auto".into());
+                strings.write().await.set_computed(CSID_CAPTURE_MODE, "auto".into());
             });
         }
 
@@ -92,7 +87,7 @@ impl SelectorState {
 
         self.poll_handle = Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(
-                std::time::Duration::from_millis(POLL_INTERVAL_MS));
+                std::time::Duration::from_millis(SELECTOR_POLL_INTERVAL_MS));
 
             loop {
                 interval.tick().await;
@@ -123,11 +118,11 @@ impl SelectorState {
         let streams = Arc::clone(streams_arc);
         let strings = Arc::clone(strings_arc);
         tokio::spawn(async move {
-            streams.write().await.destroy_stream(STREAM_ID);
+            streams.write().await.destroy_stream(STREAM_ID_MAIN);
             let mut s = strings.write().await;
-            s.clear_computed("$captureWindowTitle");
-            s.clear_computed("$captureMode");
-            s.clear_computed("$liveMode");
+            s.clear_computed(CSID_CAPTURE_WINDOW_TITLE);
+            s.clear_computed(CSID_CAPTURE_MODE);
+            s.clear_computed(CSID_LIVE_MODE);
         });
 
         log::info!("[selector] stopped");
@@ -173,7 +168,7 @@ async fn poll_once(
         if selector.last_capture_title.as_deref() != Some(&info.title) {
             selector.last_capture_title = Some(info.title.clone());
             strings_arc.write().await
-                .set_computed("$captureWindowTitle", info.title);
+                .set_computed(CSID_CAPTURE_WINDOW_TITLE, info.title);
         }
         return;
     }
@@ -193,7 +188,7 @@ async fn poll_once(
     // Switch capture.
     {
         let mut streams = streams_arc.write().await;
-        streams.replace_stream(STREAM_ID, &hwnd_str, DEFAULT_WIDTH, DEFAULT_HEIGHT, streams_arc);
+        streams.replace_stream(STREAM_ID_MAIN, &hwnd_str, DEFAULT_CAPTURE_WIDTH, DEFAULT_CAPTURE_HEIGHT, streams_arc);
     }
 
     selector.last_capture_hwnd = Some(hwnd_str.clone());
@@ -203,10 +198,10 @@ async fn poll_once(
     // Update computed strings.
     {
         let mut strings = strings_arc.write().await;
-        strings.set_computed("$captureWindowTitle", info.title);
+        strings.set_computed(CSID_CAPTURE_WINDOW_TITLE, info.title);
         match capture_match.mode {
-            Some(m) => strings.set_computed("$liveMode", m),
-            None => strings.clear_computed("$liveMode"),
+            Some(m) => strings.set_computed(CSID_LIVE_MODE, m),
+            None => strings.clear_computed(CSID_LIVE_MODE),
         }
     }
 

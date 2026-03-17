@@ -13,11 +13,7 @@ use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-/// Batch interval passed to `live-kpm.exe` (milliseconds).
-const BATCH_INTERVAL_MS: u64 = 50;
-
-/// Sliding window duration for KPM calculation (milliseconds).
-const WINDOW_DURATION_MS: u64 = 5000;
+use crate::constant::{KPM_BATCH_INTERVAL_MS, KPM_WINDOW_DURATION_MS};
 
 // ── KpmState ─────────────────────────────────────────────────────────────────
 
@@ -31,7 +27,7 @@ pub struct KpmState {
 impl KpmState {
     pub const fn new() -> Self {
         Self {
-            calculator: KpmCalculator::new(WINDOW_DURATION_MS, BATCH_INTERVAL_MS),
+            calculator: KpmCalculator::new(KPM_WINDOW_DURATION_MS, KPM_BATCH_INTERVAL_MS),
             active: false,
             child: None,
             reader_handle: None,
@@ -44,7 +40,7 @@ impl KpmState {
 
         let mut child = Command::new(exe_path)
             .arg("--batch-interval")
-            .arg(BATCH_INTERVAL_MS.to_string())
+            .arg(KPM_BATCH_INTERVAL_MS.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
@@ -88,7 +84,7 @@ impl KpmState {
         self.reader_handle = Some(reader_handle);
         self.active = true;
 
-        log::info!("[kpm] started (batch: {BATCH_INTERVAL_MS}ms, window: {WINDOW_DURATION_MS}ms)");
+        log::info!("[kpm] started (batch: {KPM_BATCH_INTERVAL_MS}ms, window: {KPM_WINDOW_DURATION_MS}ms)");
     }
 
     pub fn stop(&mut self) {

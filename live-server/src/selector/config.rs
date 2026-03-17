@@ -7,33 +7,12 @@
 //!
 //! Full pattern format: `[@mode] <exePath>[@<windowTitle>]`.
 
+use crate::constant::{DATA_DIR, SELECTOR_CONFIG_FILENAME};
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const DATA_DIR: &str = "data";
-const CONFIG_FILENAME: &str = "selector-config.json";
-
-fn config_path() -> PathBuf { Path::new(DATA_DIR).join(CONFIG_FILENAME) }
-
-const DEFAULT_PRESET_NAME: &str = "default";
-
-fn default_presets() -> HashMap<String, Vec<String>> {
-    let mut m = HashMap::new();
-    m.insert(DEFAULT_PRESET_NAME.to_owned(), vec![
-        "@code devenv.exe".into(),
-        "@code C:/Program Files/Microsoft Visual Studio Code/Code.exe".into(),
-        "@code C:/Program Files/JetBrains/".into(),
-        "@game D:/7-Games/".into(),
-        "@game D:/7-Games.Steam/steamapps/common/".into(),
-        "@game E:/Nekomaru-Games/".into(),
-        "@game E:/SteamLibrary/steamapps/common/".into(),
-        "@exclude gogh.exe".into(),
-        "@exclude vtube studio.exe".into(),
-    ]);
-    m
-}
+fn config_path() -> PathBuf { Path::new(DATA_DIR).join(SELECTOR_CONFIG_FILENAME) }
 
 // ── Preset Config ────────────────────────────────────────────────────────────
 
@@ -51,7 +30,9 @@ impl PresetConfig {
         let path = config_path();
         let Ok(content) = std::fs::read_to_string(&path) else {
             log::info!("no selector config found, using defaults");
-            return Self { preset: DEFAULT_PRESET_NAME.into(), presets: default_presets() };
+            let val = crate::constant::default_selector_config();
+            return serde_json::from_value(val)
+                .expect("default selector config is valid");
         };
 
         // Try parsing.  If it's a legacy format, migrate.
@@ -60,7 +41,7 @@ impl PresetConfig {
 
         let preset = raw.get("preset")
             .and_then(|v| v.as_str())
-            .unwrap_or(DEFAULT_PRESET_NAME)
+            .unwrap_or("default")
             .to_owned();
 
         let presets_val = raw.get("presets");
@@ -95,7 +76,10 @@ impl PresetConfig {
         }
 
         if presets.is_empty() {
-            presets = default_presets();
+            let fallback: Self = serde_json::from_value(
+                crate::constant::default_selector_config())
+                .expect("default selector config is valid");
+            presets = fallback.presets;
         }
 
         log::info!("loaded selector config: preset=\"{preset}\", {} preset(s)", presets.len());

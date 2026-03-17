@@ -16,8 +16,7 @@ use job_object::JobObject;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-/// Default buffer capacity (~1 second at 60fps).
-const FRAME_BUFFER_CAPACITY: usize = 60;
+use crate::constant::FRAME_BUFFER_CAPACITY;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
