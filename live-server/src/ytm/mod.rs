@@ -1,1 +1,1 @@
-// YouTube Music manager — Phase 5.
+pub mod manager;

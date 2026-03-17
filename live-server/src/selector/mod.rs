@@ -1,1 +1,3 @@
-// Auto window selector — Phase 5.
+pub mod config;
+pub mod manager;
+pub mod routes;

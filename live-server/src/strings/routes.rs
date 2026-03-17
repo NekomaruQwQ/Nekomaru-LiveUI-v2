@@ -25,7 +25,7 @@ pub fn router() -> Router<Arc<AppState>> {
 
 /// `GET /api/v1/strings` — return all entries as a flat JSON object.
 async fn get_all(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let store = state.strings.read().await;
+    let store = state.strings().await;
     Json(store.get_all())
 }
 
@@ -34,7 +34,7 @@ async fn get_one(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let store = state.strings.read().await;
+    let store = state.strings().await;
     let all = store.get_all();
     match all.get(&key) {
         Some(value) => Json(serde_json::json!({ "value": value })).into_response(),
@@ -53,7 +53,7 @@ async fn put_one(
     Path(key): Path<String>,
     Json(body): Json<PutBody>,
 ) -> impl IntoResponse {
-    let mut store = state.strings.write().await;
+    let mut store = state.strings_mut().await;
     match store.set(&key, &body.value) {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(StringStoreError::ComputedReadonly) =>
@@ -68,7 +68,7 @@ async fn delete_one(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let mut store = state.strings.write().await;
+    let mut store = state.strings_mut().await;
     match store.delete(&key) {
         Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(StringStoreError::ComputedReadonly) =>

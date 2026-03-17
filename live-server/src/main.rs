@@ -12,10 +12,12 @@
 
 mod audio;
 mod kpm;
+mod selector;
 mod state;
 mod strings;
 mod video;
 mod windows;
+mod ytm;
 
 use state::AppState;
 
@@ -99,9 +101,22 @@ async fn main() {
         state.kpm_mut().await.start(&kpm_exe, &kpm_arc);
     }
 
+    // Start auto-selector and YouTube Music manager.
+    {
+        let selector_arc = state.selector_arc();
+        let streams_arc = state.streams_arc();
+        let strings_arc = state.strings_arc();
+        state.selector_mut().await.start(&selector_arc, &streams_arc, &strings_arc);
+    }
+    {
+        let streams_arc = state.streams_arc();
+        state.ytm_mut().await.start(&streams_arc);
+    }
+
     let app = Router::new()
         .merge(audio::routes::router())
         .merge(kpm::routes::router())
+        .merge(selector::routes::router())
         .merge(strings::routes::router())
         .merge(video::routes::router())
         .merge(windows::router())
@@ -127,10 +142,10 @@ async fn main() {
 
 // ── Refresh ─────────────────────────────────────────────────────────────────
 
-/// `POST /api/v1/refresh` — reload string store (and later, selector config)
-/// from disk.
+/// `POST /api/v1/refresh` — reload string store and selector config from disk.
 async fn refresh(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    state.strings.write().await.reload();
+    state.strings_mut().await.reload();
+    state.selector_mut().await.reload_config();
     Json(serde_json::json!({ "ok": true }))
 }
 
