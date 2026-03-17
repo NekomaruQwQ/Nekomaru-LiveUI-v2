@@ -311,25 +311,25 @@ fn spawn_and_wire(
                                 stream.buffer.set_codec_params(params);
                                 if stream.status == StreamStatus::Starting {
                                     stream.status = StreamStatus::Running;
-                                    log::info!("[{id_owned}] running (codec params received)");
+                                    log::info!("@{id_owned} running (codec params received)");
                                 }
                             }
                             Message::Frame(frame) => {
                                 stream.buffer.push_frame(&frame);
                             }
                             Message::Error(e) => {
-                                log::error!("[{id_owned}] capture error: {e}");
+                                log::error!("@{id_owned} capture error: {e}");
                             }
                         }
                     }
                     drop(registry);
                 }
                 Ok(None) => {
-                    log::info!("[{id_owned}] stdout EOF");
+                    log::info!("@{id_owned} stdout EOF");
                     break;
                 }
                 Err(e) => {
-                    log::error!("[{id_owned}] read error: {e}");
+                    log::error!("@{id_owned} read error: {e}");
                     break;
                 }
             }
