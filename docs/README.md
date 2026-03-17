@@ -2,8 +2,8 @@
 
 **Low-latency (<100ms) screen capture streaming from DirectX 11 to the browser**
 
-**Status**: Encoding Pipeline Complete | `live-capture` Crate Done | LiveServer Implemented | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Control Panel Rewritten (stream overview, auto-config editor, string store editor) | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | Control Panel CJK Font (Microsoft YaHei UI) | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | Structured Server Logging (Grouped Stderr, Panic Detection, Debug Level) | SidePanel Widgets (Status, Capture, About) | Flat Preset Format (Merged Include/Exclude with @exclude) | $liveMode Computed String (Selector-Driven Mode Tags) | Path Separator Normalization (/ and \ interchangeable) | Strict JSON Persistence (Crash on Corrupt Config) | Justfile Recipes (refresh, capture) | Audio Streaming (WASAPI Capture, Server Pipeline, Browser Playback) | Audio Opt-in (LIVE_AUDIO env, 404 graceful stop) | KPM Meter (Burst Keystroke Counter, VU Meter, Peak Hold) | Audio MMCSS Thread Priority (Pro Audio scheduler, 40ms buffer)
-**Last Updated**: 2026-03-16
+**Status**: Encoding Pipeline Complete | `live-video` Crate Done | **Server RIIR Complete (Rust/Axum replaces TypeScript/Hono)** | Frontend Integrated | UI Redesigned (JetBrains Islands) | Auto Window Selector Integrated | Frontend Refactored (stream/ + capture hook) | Crop Mode Added | Crop Mode Refactored (Absolute Box Coordinates) | YouTube Music Island Added | Server-Managed Streams with Well-Known IDs | String Store Added | Marquee Banner Added | File Persistence (Strings + Selector Config) | Window Dimensions in Enumeration | Per-Monitor DPI Awareness | Refresh Endpoint | Window Title Matching in Selector Config | Multi-Preset Selector Config | Computed Strings (Server-Derived, Readonly) | Binary Frame Wire Format | Encoder Log File | SidePanel Widgets (Status, Capture, About) | Flat Preset Format (Merged Include/Exclude with @exclude) | $liveMode Computed String (Selector-Driven Mode Tags) | Path Separator Normalization (/ and \ interchangeable) | Strict JSON Persistence (Crash on Corrupt Config) | Justfile Recipes (refresh, capture) | Audio Streaming (WASAPI Capture, Server Pipeline, Browser Playback) | Audio Opt-in (LIVE_AUDIO env, 404 graceful stop) | KPM Meter (Burst Keystroke Counter, VU Meter, Peak Hold) | Audio MMCSS Thread Priority (Pro Audio scheduler, 40ms buffer) | KPM Binary IPC (12-byte fixed messages, replaces JSON lines) | Repo Flattened (`core/*` → top-level, `live-capture` → `live-video`)
+**Last Updated**: 2026-03-17
 **Hardware**: RTX 5090 | Windows 11
 
 ---
@@ -27,22 +27,23 @@
 ## Quick Start
 
 ```bash
-# Build the Rust executables
-cargo build --release
+# Install frontend dependencies
+cd frontend && bun i && cd ..
 
-# Start the server (auto-starts window selector + YouTube Music manager)
+# Build everything (server + all capture binaries)
+cargo build
+
+# Start the server — auto-starts selector, YTM manager, KPM.
+# Spawns Vite dev server as a child process for frontend HMR.
 # Audio capture is off by default to avoid feedback loops on localhost.
-# Set LIVE_AUDIO=1 to enable it.
-cd server && bun run index.ts
+LIVE_CORE_PORT=3000 LIVE_PORT=5173 cargo run -p live-server
+# Or with audio: LIVE_AUDIO=1 LIVE_CORE_PORT=3000 LIVE_PORT=5173 cargo run -p live-server
 
-# Open the frontend in any browser — streams start automatically
-# http://localhost:3000
+# Open the frontend — Vite proxies /api/* to the Rust server
+# http://localhost:5173
 
-# (Optional) Launch the native control panel (egui)
-cargo run -p live-control
-
-# (Optional) Launch the webview host (reads LIVE_PORT env for server URL)
-LIVE_PORT=3000 cargo run -p live-app
+# (Optional) Launch the webview host
+LIVE_PORT=5173 cargo run -p live-app
 
 # (Optional) Manual capture via curl (the server manages "main" and
 # "youtube-music" automatically, but you can still create extra streams)
@@ -57,33 +58,33 @@ curl -X POST http://localhost:3000/api/v1/streams \
 
 ### Multi-Executable Design
 
-The project is split into six independently running components. The hard work (GPU capture + hardware encoding + audio capture + keyboard hooks) stays in Rust. Everything the user touches (HTTP API, stream buffering, frontend serving) is TypeScript for fast iteration.
+The project is split into four independently running components, all in Rust.  The server (`live-server`) manages everything: HTTP API, process lifecycle, frame buffering, auto-selector, string store.  Capture processes are spawned as children and communicate via binary IPC over stdout pipes.
 
 ```mermaid
 graph TD
-    subgraph rust["Rust Child Processes (spawned by LiveServer)"]
-        capture["<b>live-capture.exe</b><br/>One instance per window<br/>WinRT Capture → GPU Resample/Crop<br/>→ BGRA→NV12 → NVENC H.264<br/>→ binary frames to stdout"]
-        audio["<b>live-audio.exe</b><br/>Single instance<br/>WASAPI shared-mode capture<br/>→ f32→s16le → 10ms chunks<br/>→ binary audio to stdout"]
-        kpm["<b>live-kpm.exe</b><br/>Single instance<br/>WH_KEYBOARD_LL hook<br/>(privacy: no key identity)<br/>→ JSON lines to stdout"]
-    end
-
-    subgraph server["LiveServer (TypeScript, Hono on Bun)"]
-        procmgr["<b>Process Manager</b><br/>Spawns/kills capture instances<br/>Well-known IDs: main, youtube-music<br/>Generation counter per stream"]
-        audiomgr["<b>Audio Manager</b><br/>Opt-in via LIVE_AUDIO=1<br/>Binary parser → circular buffer"]
-        kpmmgr["<b>KPM Manager</b><br/>Always enabled<br/>JSON parser → 5s sliding window"]
-        buffer["<b>Stream Buffer</b><br/>Circular (60 frames/stream)<br/>SPS/PPS cache, seq numbers"]
+    subgraph server["live-server (Rust/Axum, primary process)"]
+        procmgr["<b>Stream Registry</b><br/>Spawns/kills capture instances<br/>Well-known IDs: main, youtube-music<br/>Generation counter per stream"]
+        audiomgr["<b>Audio Manager</b><br/>Opt-in via LIVE_AUDIO<br/>Binary parser → circular buffer"]
+        kpmmgr["<b>KPM Manager</b><br/>Always enabled<br/>Binary reader → 5s sliding window"]
+        buffer["<b>Video Buffer</b><br/>Circular (60 frames/stream)<br/>SPS/PPS cache, keyframe gating"]
         selector["<b>Auto Selector + YTM</b><br/>Foreground polling → main stream<br/>YouTube Music → crop stream"]
         strings["<b>String Store</b><br/>Key-value + computed ($-prefix)<br/>Persisted to data/"]
         api["<b>HTTP API</b> /api/v1<br/>/streams, /audio, /kpm, /strings"]
     end
 
-    subgraph frontend["Browser / live-app.exe"]
+    subgraph children["Rust Child Processes (spawned by live-server)"]
+        capture["<b>live-video.exe</b><br/>One instance per window<br/>WinRT Capture → GPU Resample/Crop<br/>→ BGRA→NV12 → NVENC H.264<br/>→ binary frames to stdout"]
+        audio["<b>live-audio.exe</b><br/>Single instance<br/>WASAPI shared-mode capture<br/>→ f32→s16le → 10ms chunks<br/>→ binary audio to stdout"]
+        kpm["<b>live-kpm.exe</b><br/>Single instance<br/>WH_KEYBOARD_LL hook<br/>(privacy: no key identity)<br/>→ binary batches to stdout"]
+    end
+
+    subgraph frontend["Browser (via Vite dev proxy) / live-app.exe"]
         viewer["<b>Frontend</b> (React + WebCodecs)<br/>H264Decoder, StreamRenderer<br/>AudioStream (PCM worklet)<br/>KpmMeter (VU bar, peak hold)<br/>Polls strings for dynamic text"]
     end
 
-    capture -- "stdout (binary)" --> procmgr
-    audio -- "stdout (binary)" --> audiomgr
-    kpm -- "stdout (JSON lines)" --> kpmmgr
+    capture -- "stdout (binary IPC)" --> procmgr
+    audio -- "stdout (binary IPC)" --> audiomgr
+    kpm -- "stdout (12-byte binary)" --> kpmmgr
     procmgr --> buffer
     api -- "HTTP (localhost)" --> viewer
 ```
@@ -92,13 +93,42 @@ graph TD
 
 | Concern | Decision | Rationale |
 |---------|----------|-----------|
-| GPU capture + encoding | Rust (`live-capture`) | Requires `unsafe` Windows APIs, hardware access, zero-copy GPU pipelines. No alternative. |
+| GPU capture + encoding | Rust (`live-video`) | Requires `unsafe` Windows APIs, hardware access, zero-copy GPU pipelines. No alternative. |
 | Audio capture | Rust (`live-audio`) | WASAPI requires COM + `unsafe`. Same child-process-to-stdout model as video capture. |
-| Keystroke counting | Rust (`live-kpm`) | `WH_KEYBOARD_LL` requires Win32 message pump. Privacy-by-design: never reads key identity. JSON lines to stdout. |
-| HTTP server + stream management | TypeScript (Hono on Bun) | Pure I/O multiplexing — shuttles bytes from child processes to HTTP clients. Dev velocity (hot reload) matters far more than soundness here. |
-| Control panel | Rust (`live-control`, optional) | Native egui/eframe GUI for managing captures. Talks to LiveServer via blocking HTTP. |
+| Keystroke counting | Rust (`live-kpm`) | `WH_KEYBOARD_LL` requires Win32 message pump. Privacy-by-design: never reads key identity. Binary IPC to stdout. |
+| HTTP server + stream management | Rust (`live-server`, Axum) | Reuses protocol types from lib crates directly (`live_video::read_message()`). No protocol duplication. Single process for all server logic. |
 | Webview host | Rust (`live-app`, optional) | Tiny wry wrapper for aspect-ratio-locked window. Could also just use a browser. |
-| IPC | Child process stdout | Zero config, natural lifetime (process death = stream death), trivially testable (`live-capture > dump.bin`). |
+| IPC | Child process stdout | Zero config, natural lifetime (process death = stream death), trivially testable (`live-video > dump.bin`). |
+| Frontend dev server | Vite (spawned by live-server) | HMR for React development. Vite's built-in proxy forwards `/api/*` to the Rust server. Production: `tower-http::ServeDir` serves pre-built `dist/`. |
+
+### Why RIIR? (Rewrite It In Rust)
+
+The server was originally TypeScript (Hono on Bun).  It was rewritten in Rust for these reasons:
+
+1. **Protocol duplication eliminated.**  The TypeScript server had hand-written binary parsers (`protocol.ts`, `audio-protocol.ts`, `kpm-protocol.ts`) that mirrored the Rust lib crate types.  After RIIR, the server calls `live_video::read_message()` and `live_audio::read_message()` directly — zero parsing code to maintain.
+
+2. **Single process.**  The TypeScript server was a separate process that spawned Rust children.  Now `live-server` is the primary process: it spawns children, manages buffers, serves HTTP, and spawns Vite — all from one binary.  No IPC between server layers, no proxy, no port coordination.
+
+3. **The "iterable" surface was small.**  The original rationale for TypeScript was "fast iteration on the server".  In practice, the string store, selector config, and persistence code changed rarely.  The real iteration happened in the React frontend (served by Vite regardless).
+
+4. **KPM simplification.**  With both ends in Rust, `live-kpm` switched from JSON lines to 12-byte fixed-size binary messages — no serde, no JSON parsing overhead.  The server reads `u64 + u32` directly.
+
+5. **Window enumeration without process spawn.**  The TypeScript server shelled out to `live-video.exe --enumerate-windows` and `--foreground-window` for every poll.  The Rust server calls `enumerate_windows::enumerate_windows()` and `get_foreground_window()` as library functions — no child process, no JSON parse.
+
+6. **Concurrency model fits Rust.**  The 60fps frame polling endpoint is read-heavy (N clients reading concurrently) with brief writes (1 frame push per 16ms).  `tokio::sync::RwLock` handles this naturally.  The TypeScript server was single-threaded by design, which worked but left no room for growth.
+
+### Design Decisions (RIIR)
+
+| Decision | Choice | Why |
+|----------|--------|-----|
+| Web framework | Axum (tower-based) | De facto standard Rust web framework (2025). No macro magic, native tokio integration, typed extractors. |
+| Async runtime | tokio (full features) | Required by Axum. Child process stdout is read on `spawn_blocking` threads. |
+| Logging | `pretty_env_logger` | Already in workspace. Simple and sufficient — nobody reads structured logs for a personal streaming tool. |
+| Capture processes | Kept as children (not embedded) | A crash in NVENC or WASAPI doesn't take down the server.  Capture binaries use blocking I/O on dedicated threads.  Pipe overhead is negligible (~0.1ms). |
+| Buffer concurrency | `tokio::sync::RwLock<StreamRegistry>` | Read-heavy: 60fps polls from N clients share the read lock. Single-producer write lock held for microseconds per frame push. |
+| Frontend API client | Plain `fetch()` (was Hono RPC) | With the TypeScript server gone, the Hono RPC type chain (`hc<ApiType>`) was removed.  Plain `fetch()` with TypeScript interfaces is simpler and has no runtime dependency. |
+| Vite integration | Spawned as child, proxy via `vite.config.ts` | Vite's built-in `server.proxy` forwards `/api/*` to the Rust server during development.  No CORS needed.  Production: `tower-http::ServeDir` serves `dist/` on the same port. |
+| Port configuration | `LIVE_CORE_PORT` (server) + `LIVE_PORT` (Vite dev) | No default ports — avoids conflicts with other Vite apps or dev servers. Both required. |
 
 ### Why Not a Monolith?
 
@@ -106,7 +136,7 @@ The previous monolith (`src/app.rs`) mixed window events, GPU capture, encoding,
 
 - **Can't view in a normal browser** (wry custom protocol only)
 - **Can't run multiple captures** (single encoding thread)
-- **Can't iterate on the server/API** without recompiling Rust
+- **Can't iterate on the frontend** without recompiling Rust
 - **Can't develop frontend** without the full Rust app running
 
 ### File Ownership
@@ -164,7 +194,7 @@ Widgets are rendered inside `SidePanel` (the left column island in `app.tsx`), w
 
 ## IPC Wire Protocol
 
-`live-capture.exe` writes length-prefixed binary messages to stdout. LiveServer reads and parses them.
+`live-video.exe` writes length-prefixed binary messages to stdout.  `live-server` reads them via `live_video::read_message()` (direct Rust library call — no protocol parser reimplementation).
 
 ### Message Format
 
@@ -217,19 +247,19 @@ Two exclusive capture modes: **resample** (scale full window) or **crop** (extra
 
 ```bash
 # Resample mode — scale full window to target resolution
-live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200
+live-video.exe --hwnd 0x1A2B3C --width 1920 --height 1200
 
 # Crop mode — absolute bounding box in source pixels
-live-capture.exe --hwnd 0x1A2B3C --crop-min-x 0 --crop-min-y 600 --crop-max-x 1920 --crop-max-y 700
+live-video.exe --hwnd 0x1A2B3C --crop-min-x 0 --crop-min-y 600 --crop-max-x 1920 --crop-max-y 700
 
 # List capturable windows as JSON (includes width/height)
-live-capture.exe --enumerate-windows
+live-video.exe --enumerate-windows
 
 # Get the current foreground window as JSON (used by auto-selector)
-live-capture.exe --foreground-window
+live-video.exe --foreground-window
 
 # Dump to file for debugging
-live-capture.exe --hwnd 0x1A2B3C --width 1920 --height 1200 > capture_dump.bin
+live-video.exe --hwnd 0x1A2B3C --width 1920 --height 1200 > capture_dump.bin
 ```
 
 **Crop mode args:**
@@ -246,24 +276,19 @@ Logging goes to stderr.
 
 ### KPM Protocol (`live-kpm.exe`)
 
-Unlike `live-capture` and `live-audio` (binary envelope), `live-kpm` uses JSON lines for easier debugging. Each stdout line is a single batch object:
+`live-kpm` uses fixed-size 12-byte binary messages (both ends are Rust, so no JSON overhead needed).  The server reads batches via `live_kpm::read_batch()`.
 
-```json
-{"t":1710590400123456,"c":5}
+```
+[u64 LE: timestamp_us]   — wall-clock timestamp (microseconds since Unix epoch)
+[u32 LE: count]           — number of keystrokes in this batch interval
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `t` | integer | Wall-clock timestamp in microseconds since Unix epoch |
-| `c` | integer | Number of keystrokes in the batch interval |
+No length prefix or envelope header needed — messages are fixed-size.  EOF signals process exit.
 
 **CLI:**
 
 ```bash
 # Count keystrokes, batch every 50ms
-live-kpm.exe --batch-interval 50
-
-# Debug: pipe to terminal to see JSON lines
 live-kpm.exe --batch-interval 50
 ```
 
@@ -275,7 +300,7 @@ live-kpm.exe --batch-interval 50
 
 ## HTTP API
 
-Served by LiveServer (Hono on Bun). Port is preconfigured via environment variable or hardcoded default. All endpoints are prefixed with `/api/v1`.
+Served by `live-server` (Rust/Axum).  Port is configured via `LIVE_CORE_PORT` environment variable (required, no default).  All endpoints are prefixed with `/api/v1`.
 
 ### Stream Management
 
@@ -287,7 +312,7 @@ Served by LiveServer (Hono on Bun). Port is preconfigured via environment variab
 ]
 ```
 
-**`POST /api/v1/streams`** — Create a new capture (spawns a `live-capture.exe` instance). Accepts either resample mode or crop mode (mutually exclusive).
+**`POST /api/v1/streams`** — Create a new capture (spawns a `live-video.exe` instance). Accepts either resample mode or crop mode (mutually exclusive).
 
 ```json
 // Resample mode — scale the full window to fit width × height
@@ -329,7 +354,7 @@ per frame:
 
 The `generation` field increments each time the underlying capture process is replaced (e.g. window switch). The frontend uses this to detect replacements and reinitialize its decoder. Each frame's payload contains the pre-serialized binary data (timestamp + NAL units) — same format as the IPC wire protocol's frame payload. Keyframe status is inferred from NAL unit types on the frontend. Returns JSON `{ "error": "..." }` with 404 status if the stream doesn't exist.
 
-**`GET /api/v1/streams/windows`** — List capturable windows (one-shot spawn of `live-capture.exe --enumerate-windows`).
+**`GET /api/v1/streams/windows`** — List capturable windows (direct library call to `enumerate_windows::enumerate_windows()` — no child process spawn).
 
 ### Auto Window Selector
 
@@ -396,7 +421,7 @@ gaming
 
 Server-managed key-value string store. The control panel (or curl) writes values; the frontend polls and displays them at designated locations by well-known ID.
 
-Keys prefixed with `$` are **computed strings** — readonly values derived from live server state, not backed by any storage. They appear in GET responses alongside regular strings but cannot be written or deleted via the API (returns 403). Producers push values directly via `setComputed()` / `clearComputed()` in `server/strings.ts`.
+Keys prefixed with `$` are **computed strings** — readonly values derived from live server state, not backed by any storage. They appear in GET responses alongside regular strings but cannot be written or deleted via the API (returns 403). Producers push values via `StringStore::set_computed()` / `clear_computed()` in `live-server/src/strings/store.rs`.
 
 **Current computed strings:**
 
@@ -453,20 +478,20 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 
 ## Implementation Status
 
-### Completed (`live-capture` crate — `core/live-capture/`)
+### Completed (`live-video` crate — `live-video/`)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **IPC Protocol (lib)** | `core/live-capture/src/lib.rs` | Done | Wire protocol types (`NALUnit`, `CodecParams`, `FrameMessage`) + serialization/deserialization via `impl Write`/`impl Read`. Round-trip tested. |
-| **CLI + Orchestration** | `core/live-capture/src/main.rs` | Done | Two exclusive capture modes: resample (`--width`/`--height`) and crop (`--crop-min-x/y`/`--crop-max-x/y` absolute box). `--enumerate-windows` and `--foreground-window` one-shot modes. Per-monitor DPI aware (physical pixel sizes). Bakery model: capture thread + encoding thread → binary stdout. Dual-output logging: encoder init diagnostics (info/debug/trace) → `live-capture.encoder.log` next to exe (truncated per capture run); warn/error + all other modules → stderr. Utility modes skip log file creation to avoid truncating a concurrent capture's log. |
-| **D3D11 Helpers** | `core/live-capture/src/d3d11.rs` | Done | Device creation, texture/view factories (subset of monolith `app/helper.rs`) |
-| **Format Converter** | `core/live-capture/src/converter.rs` | Done | GPU-accelerated BGRA→NV12 via `ID3D11VideoProcessor`. Resolution now parameterized. |
-| **H.264 Encoder** | `core/live-capture/src/encoder.rs` | Done | Async MFT with low-latency settings, NAL parsing. Callbacks passed to `run()` (monomorphized, no `Box<dyn>`). |
-| **Encoder Helpers** | `core/live-capture/src/encoder/helper.rs` | Done | Finds NVIDIA NVENC encoder |
-| **Debug Logging** | `core/live-capture/src/encoder/debug.rs` | Done | Prints supported media types |
-| **Resampler** | `core/live-capture/src/resample.rs` | Done | Scales captured frames with viewport set |
-| **Capture + Crop** | `core/live-capture/src/capture.rs` | Done | Windows Graphics Capture wrapper + viewport calculation. `CropBox` (absolute min/max coordinates) with `to_d3d11_box()` for subrect extraction via `CopySubresourceRegion`. |
-| **Window Enumeration** | `crates/enumerate-windows/src/lib.rs` | Done | `enumerate_windows()` lists capturable windows (with client-area width/height in physical pixels). `get_foreground_window()` returns current foreground window info. |
+| **IPC Protocol (lib)** | `live-video/src/lib.rs` | Done | Wire protocol types (`NALUnit`, `CodecParams`, `FrameMessage`) + serialization/deserialization via `impl Write`/`impl Read`. `read_message()` reused directly by `live-server` — no protocol parser reimplementation. Round-trip tested. |
+| **CLI + Orchestration** | `live-video/src/main.rs` | Done | Two exclusive capture modes: resample (`--width`/`--height`) and crop (`--crop-min-x/y`/`--crop-max-x/y` absolute box). `--enumerate-windows` and `--foreground-window` one-shot modes. Per-monitor DPI aware (physical pixel sizes). Bakery model: capture thread + encoding thread → binary stdout. Dual-output logging: encoder init diagnostics (info/debug/trace) → `live-video.encoder.log` next to exe (truncated per capture run); warn/error + all other modules → stderr. Utility modes skip log file creation to avoid truncating a concurrent capture's log. |
+| **D3D11 Helpers** | `live-video/src/d3d11.rs` | Done | Device creation, texture/view factories (subset of monolith `app/helper.rs`) |
+| **Format Converter** | `live-video/src/converter.rs` | Done | GPU-accelerated BGRA→NV12 via `ID3D11VideoProcessor`. Resolution now parameterized. |
+| **H.264 Encoder** | `live-video/src/encoder.rs` | Done | Async MFT with low-latency settings, NAL parsing. Callbacks passed to `run()` (monomorphized, no `Box<dyn>`). |
+| **Encoder Helpers** | `live-video/src/encoder/helper.rs` | Done | Finds NVIDIA NVENC encoder |
+| **Debug Logging** | `live-video/src/encoder/debug.rs` | Done | Prints supported media types |
+| **Resampler** | `live-video/src/resample.rs` | Done | Scales captured frames with viewport set |
+| **Capture + Crop** | `live-video/src/capture.rs` | Done | Windows Graphics Capture wrapper + viewport calculation. `CropBox` (absolute min/max coordinates) with `to_d3d11_box()` for subrect extraction via `CopySubresourceRegion`. |
+| **Window Enumeration** | `crates/enumerate-windows/src/lib.rs` | Done | `enumerate_windows()` lists capturable windows (with client-area width/height in physical pixels). `get_foreground_window()` returns current foreground window info. Called as a library by `live-server` (no process spawn). |
 
 ### Completed (Frontend Stream Module — `frontend/src/stream/`)
 
@@ -475,12 +500,12 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 | **Decoder** | `frontend/src/stream/decoder.ts` | Done | H264Decoder with WebCodecs, avcC descriptor. `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). |
 | **Renderer** | `frontend/src/stream/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering, ~60fps polling loop. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Owns full decoder lifecycle via `startStreamLoop()`. 404 treated as retriable. Parses binary frame responses directly (`parseBinaryFrameResponse()` — zero-copy `subarray` slices). |
 
-### Completed (`live-audio` crate — `core/live-audio/`)
+### Completed (`live-audio` crate — `live-audio/`)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **IPC Protocol (lib)** | `core/live-audio/src/lib.rs` | Done | Wire protocol types (`AudioParams`, `AudioFrame`) + serialization. Message types: `0x10` AudioParams (sample rate, channels, bits), `0x11` AudioFrame (timestamp + PCM), `0xFF` Error. |
-| **CLI + Capture Loop** | `core/live-audio/src/main.rs` | Done | WASAPI shared-mode capture. `--device` name-matched lookup, `--list-devices` enumeration mode. Captures at device native rate, outputs fixed 10ms s16le chunks. f32→s16 conversion with clamping. 5ms poll sleep, 40ms WASAPI buffer. MMCSS "Pro Audio" thread registration for guaranteed scheduling under heavy CPU load. Broken pipe → clean exit (reverts MMCSS). |
+| **IPC Protocol (lib)** | `live-audio/src/lib.rs` | Done | Wire protocol types (`AudioParams`, `AudioFrame`) + serialization. Message types: `0x10` AudioParams (sample rate, channels, bits), `0x11` AudioFrame (timestamp + PCM), `0xFF` Error. `read_message()` reused directly by `live-server`. |
+| **CLI + Capture Loop** | `live-audio/src/main.rs` | Done | WASAPI shared-mode capture. `--device` name-matched lookup, `--list-devices` enumeration mode. Captures at device native rate, outputs fixed 10ms s16le chunks. f32→s16 conversion with clamping. 5ms poll sleep, 40ms WASAPI buffer. MMCSS "Pro Audio" thread registration for guaranteed scheduling under heavy CPU load. Broken pipe → clean exit (reverts MMCSS). |
 
 ### Completed (Frontend Audio Module — `frontend/src/audio/`)
 
@@ -489,12 +514,12 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 | **Audio Stream** | `frontend/src/audio/index.tsx` | Done | Invisible `<AudioStream>` component. Polls `/api/v1/audio/chunks?after=N` with adaptive timing (16ms normal, 4ms fast retry). Posts PCM chunks to worklet immediately — no A/V sync. Handles browser autoplay policy. Exits gracefully on 404 (audio disabled). |
 | **PCM Worklet** | `frontend/src/audio/worklet.ts` | Done | AudioWorklet processor with ring buffer (9600 frames = 200ms at 48kHz). Receives s16le via MessagePort, converts to f32, outputs at audio callback rate. Silence on underrun. |
 
-### Completed (`live-kpm` crate — `core/live-kpm/`)
+### Completed (`live-kpm` crate — `live-kpm/`)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **JSON Protocol (lib)** | `core/live-kpm/src/lib.rs` | Done | JSON line protocol. `Batch` type with `t` (timestamp_us) and `c` (count). `write_batch()` / `parse_batch()`. Round-trip tested. |
-| **CLI + Capture Loop** | `core/live-kpm/src/main.rs` | Done | `WH_KEYBOARD_LL` system-wide hook. Required `--batch-interval` arg. Main thread: Win32 message pump. Writer thread: timer loop, `AtomicU32` counter → JSON lines to stdout. Privacy-by-design: never reads `vkCode`/`scanCode`. Broken pipe → clean exit via `PostQuitMessage`. |
+| **Binary Protocol (lib)** | `live-kpm/src/lib.rs` | Done | Fixed 12-byte binary protocol. `Batch` type with `t` (timestamp_us, u64 LE) and `c` (count, u32 LE). `write_batch()` / `read_batch()`. No envelope header — fixed message size. Round-trip tested. |
+| **CLI + Capture Loop** | `live-kpm/src/main.rs` | Done | `WH_KEYBOARD_LL` system-wide hook. Required `--batch-interval` arg. Main thread: Win32 message pump. Writer thread: timer loop, `AtomicU32` counter → 12-byte binary batches to stdout. Privacy-by-design: never reads `vkCode`/`scanCode`. Broken pipe → clean exit via `PostQuitMessage`. |
 
 ### Completed (Frontend KPM Module — `frontend/src/kpm/`)
 
@@ -502,57 +527,49 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 |-----------|------|--------|-------|
 | **KPM Meter** | `frontend/src/kpm/index.tsx` | Done | `useKpm()` hook polls `GET /api/v1/kpm` at ~150ms. Frontend-computed peak hold (1.5s hold + 0.5s linear decay). `<KpmMeter>` renders vertical VU-style bar with LED segments, neon accent color (tracks island hue via `currentColor`), prominent peak marker with glow, live KPM readout + keyboard icon label. |
 
-### Completed (Control Panel — `core/live-control/`)
+### Completed (Webview Host — `live-app/`)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Entry Point** | `core/live-control/src/main.rs` | Done | `eframe::run_native`, reads `LIVE_PORT` env var. 720×640 window. Loads Microsoft YaHei UI (`msyh.ttc` index 1) at startup for CJK support. |
-| **App** | `core/live-control/src/app.rs` | Done | `ControlApp` (eframe::App). Three sections: stream overview (grid with ID, generation, hwnd, title, executable, status, destroy), auto-selector (start/stop + include/exclude list editor with dirty tracking), string store (CRUD, immediate API calls). Polls server every 2s. Cross-references stream hwnd with window list for title/executable resolution. |
-| **HTTP Client** | `core/live-control/src/client.rs` | Done | Blocking reqwest wrapper. Endpoints: streams (list, destroy), auto-selector (status, start, stop, get/set config), string store (get all, set, delete). 1s timeout to avoid UI hangs. |
-| **Data Types** | `core/live-control/src/model.rs` | Done | `StreamInfo` (with generation), `WindowInfo`, `AutoStatus`, `SelectorConfig` — mirrors server JSON responses. |
+| **live-app** | `live-app/src/main.rs` | Done | Non-resizable 1280x800 wry webview via nkcore/winit event loop. CLI args: `--url`, `--window-title`, `--scaling-factor`. Reads `LIVE_PORT` env for default URL. |
 
-### Completed (Webview Host)
+### Completed (`live-server` — Rust/Axum, `live-server/`)
 
-| Component | File | Status | Notes |
-|-----------|------|--------|-------|
-| **live-app** | `core/live-app/src/main.rs` | Done | Non-resizable 1280x800 wry webview via nkcore/winit event loop. CLI args: `--url`, `--window-title`, `--scaling-factor`. Reads `LIVE_PORT` env for default URL. |
+Replaces the former TypeScript Hono server.  All server logic is now Rust.  Modules are grouped by logical component (video, audio, KPM, selector, etc.) — each co-locates its buffer, process manager, and HTTP routes.
 
-### Completed (LiveServer — `server/`)
+| Component | File(s) | Status | Notes |
+|-----------|---------|--------|-------|
+| **Entry Point** | `live-server/src/main.rs` | Done | Axum HTTP server. CLI args via clap (port, exe paths, audio device/enable). Auto-starts selector, YTM manager, KPM on boot. Audio gated by `--audio` / `LIVE_AUDIO` env. Spawns Vite dev server as child when `LIVE_PORT` is set. Resolves sibling executables from cargo build output. |
+| **Shared State** | `live-server/src/state.rs` | Done | `AppState` with per-subsystem `Arc<RwLock<T>>`. Accessor methods for read/write locks and cloneable `Arc` handles for child-process reader tasks. |
+| **Video Buffer** | `live-server/src/video/buffer.rs` | Done | Per-stream circular buffer (60 frames). Pre-serializes frames on push. Keyframe gating for first client request (WebCodecs decoder needs IDR to initialize). `reset()` on stream replacement. 6 unit tests. |
+| **Video Process** | `live-server/src/video/process.rs` | Done | `StreamRegistry` with `CaptureStream` entries. `spawn_and_wire()` spawns `live-video.exe`, reads stdout via `live_video::read_message()` on `spawn_blocking` thread, pushes into buffer. `create_stream()` / `create_crop_stream()` for manual use. `replace_stream()` / `replace_crop_stream()` for well-known IDs — kill old, reset buffer, bump generation (idempotent). Stderr forwarded to `log::info!`. |
+| **Video Routes** | `live-server/src/video/routes.rs` | Done | `GET/POST /streams`, `DELETE /streams/:id`, `GET /streams/:id/init` (SPS/PPS base64), `GET /streams/:id/frames?after=N` (binary `application/octet-stream` with generation header). |
+| **Audio Buffer** | `live-server/src/audio/buffer.rs` | Done | Circular chunk buffer (100 chunks = ~1s). Pre-serialized payloads. Generation reset detection (stale cursor → return all). 4 unit tests. |
+| **Audio Process** | `live-server/src/audio/process.rs` | Done | `AudioState` singleton. Spawns `live-audio.exe`, reads stdout via `live_audio::read_message()`. Reset on process exit. |
+| **Audio Routes** | `live-server/src/audio/routes.rs` | Done | `GET /audio/init` (format params, 503/404), `GET /audio/chunks?after=N` (binary + delta encoding + gzip via `flate2`). 1 delta-encoding unit test. |
+| **KPM Calculator** | `live-server/src/kpm/calculator.rs` | Done | 5-second sliding window with `VecDeque`. Extrapolates to KPM. No peak tracking (frontend handles it). 5 unit tests. |
+| **KPM Process** | `live-server/src/kpm/process.rs` | Done | `KpmState` singleton. Spawns `live-kpm.exe`, reads 12-byte binary batches via `live_kpm::read_batch()`. Always enabled. |
+| **KPM Route** | `live-server/src/kpm/routes.rs` | Done | `GET /kpm` → `{ kpm: number }`. Returns 404 if process not running. |
+| **Selector Config** | `live-server/src/selector/config.rs` | Done | `PresetConfig` with persistence to `data/selector-config.json`. Pattern parser: `[@mode] <exePath>[@<windowTitle>]`. `should_capture()` with exclude-veto semantics. Path separator normalization. Legacy format migration. 9 unit tests. |
+| **Selector Manager** | `live-server/src/selector/manager.rs` | Done | `SelectorState`. Polls foreground window every 2s via `enumerate_windows::get_foreground_window()` (direct library call). Replaces `"main"` stream on match. Pushes `$captureWindowTitle`, `$liveMode`, `$captureMode` computed strings. |
+| **Selector Routes** | `live-server/src/selector/routes.rs` | Done | `GET/POST/DELETE /streams/auto`, `GET/PUT /streams/auto/config`, `PUT /streams/auto/config/preset`. |
+| **YTM Manager** | `live-server/src/ytm/manager.rs` | Done | `YtmState`. Polls `enumerate_windows()` every 5s, finds "YouTube Music" window. Creates/replaces `"youtube-music"` crop stream (bottom playback bar). Destroys on window disappearance. |
+| **String Store** | `live-server/src/strings/store.rs` | Done | `StringStore` with `HashMap<String, String>` (user) + `HashMap<String, String>` (computed, `$`-prefixed). Dual-layer persistence: `data/strings.json` (single-line) + `data/strings/<key>.md` (multiline). Strict mode: crash on corrupt JSON. |
+| **String Routes** | `live-server/src/strings/routes.rs` | Done | `GET /strings` (all, merged), `PUT /strings/:key` (set, 403 for `$`), `DELETE /strings/:key`. |
+| **Window Enumeration** | `live-server/src/windows.rs` | Done | `GET /streams/windows` — calls `enumerate_windows::enumerate_windows()` on `spawn_blocking` thread. No process spawn. |
 
-| Component | File | Status | Notes |
-|-----------|------|--------|-------|
-| **Entry Point** | `server/index.ts` | Done | Hono app + Vite dev server (middleware mode) on single `node:http` port. Routes `/api/v1/*` → Hono, everything else → Vite. Auto-starts selector and YTM manager on boot. Audio manager gated by `LIVE_AUDIO` env (opt-in). Reads `jj log -r @-` timestamp and pushes `$timestamp` computed string. SIGINT/SIGTERM cleanup. |
-| **Stream API** | `server/api.ts` | Done | Hono sub-router mounted at `/api/v1/streams`. Routes: `GET/POST/DELETE /`, `GET/POST/DELETE /auto`, `GET/PUT /auto/config`, `PUT /auto/config/preset`, `GET /:id/init`, `GET /:id/frames?after=N`, `GET /windows`. POST accepts resample or crop mode (Zod union — crop uses absolute bounding box). `generation` field in list and frames responses. Frames endpoint returns binary (`application/octet-stream`) — no JSON/base64 overhead. |
-| **Logging** | `server/log.ts` | Done | Structured, color-coded logging for all server modules and forwarded Rust stderr. Three systems: (1) **Marker system** — `[moduleId]` and `[@streamId moduleId]` with cyan brackets, bold green stream IDs. (2) **Alignment** — per-level pad widths (`BASE_PAD_WIDTH` 18 for non-stream, +streamId length+2 for stream-scoped) so messages align within each nesting level. (3) **Rust stderr forwarding** — `writeCaptureGroup()` renders grouped env_logger lines: single-line inline with marker, multiline with marker alone + body indented +4. Panic detection (`PANIC_RE`) upgrades entire group to bold red. `isCaptureLogHead()` exported for group boundary detection. `Logger` interface: `info`, `warn`, `error`, `debug`. Debug level gated by `LIVEUI_DEBUG` env var (zero-cost no-op when unset). |
-| **Process Manager** | `server/process.ts` | Done | `CaptureStream` with `generation` counter. `spawnAndWire()` helper shared by create and replace paths. `createStream()`/`createCropStream()` for manual use (random IDs). `replaceStream()`/`replaceCropStream()` for well-known IDs — kills old process, resets buffer, bumps generation in-place (idempotent: creates if missing). Crop streams use absolute bounding box (minX/Y, maxX/Y). `pipeStderr()` groups Rust log lines using time-based flush (10ms delay) and head detection before forwarding to `writeCaptureGroup()`. |
-| **Protocol Parser** | `server/protocol.ts` | Done | Push-based incremental binary parser. Handles partial reads, greedy parse loop. Mirrors Rust wire format exactly. |
-| **Frame Buffer** | `server/buffer.ts` | Done | Per-stream circular buffer (60 frames). Multi-viewer safe (no drain). Pre-serializes frames on push. Skips to first keyframe for new clients. `reset()` clears all state on stream replacement. |
-| **Constants** | `server/common.ts` | Done | Port (`LIVE_PORT` env or 3000), exe path, buffer capacity, data directory path. `audioEnabled` flag from `LIVE_AUDIO` env. |
-| **Auto Selector** | `server/selector.ts` | Done | `LiveWindowSelector` class. Polls foreground window every 2s via `live-capture.exe --foreground-window`. Multi-preset config: each preset is a flat `string[]` — entries are include by default, `@exclude` marks exclusions. Pattern format: `[@mode] <exePath>[@<windowTitle>]` — `@mode` prefix (e.g. `@code`, `@game`) tags entries with a live mode pushed as `$liveMode` on capture switch. Path separators normalized (`/` and `\` interchangeable). Presets switchable at runtime via `PUT /auto/config/preset`. Config persisted to `data/selector-config.json` — loaded on startup (migrates legacy `{ include, exclude }` format), written on every change. Uses `replaceStream("main", ...)` — stream ID is always `"main"`, generation bumps on each switch. Pushes `$captureWindowTitle` and `$liveMode` on capture switch, `$captureMode` on start/stop. |
-| **YouTube Music Manager** | `server/youtube-music.ts` | Done | `YouTubeMusicManager` class. Polls `enumerateWindows()` every 5s, finds window by `"YouTube Music"` title prefix. Creates/replaces `"youtube-music"` crop stream (bottom 96px computed from window dimensions). Destroys stream when window disappears. |
-| **Persistence** | `server/persist.ts` | Done | Thin JSON file persistence utility. `loadJson(path, fallback)` / `saveJson(path, data)` using Bun APIs. Creates `data/` directory on module load. Strict mode: missing files return fallback silently (first run), but corrupt/malformed JSON crashes the server instead of silently degrading. |
-| **String Store** | `server/strings.ts` | Done | `Map<string, string>` persisted to `data/strings.json`. Hono routes: `GET /` (all pairs, merged with computed strings), `PUT /:key` (set + save, rejects `$` prefix with 403), `DELETE /:key` (delete + save, rejects `$` prefix with 403). Separate `computedStore` map for server-derived readonly strings — producers push via `setComputed()`/`clearComputed()`. Loaded from disk on startup, falls back to empty. Exports `StringsApiType` for frontend RPC. Mounted at `/api/v1/strings` in `index.ts`. |
-| **Audio Manager** | `server/audio.ts` | Done | `AudioManager` class. Spawns `live-audio.exe` with device name, reads stdout via `AudioProtocolParser`, pipes stderr through grouped log forwarding. Single global audio source (not per-stream). |
-| **Audio Protocol** | `server/audio-protocol.ts` | Done | Push-based incremental binary parser for audio IPC messages (`AudioParams`, `AudioFrame`, `Error`). Same pattern as video `protocol.ts`. |
-| **Audio Buffer** | `server/audio-buffer.ts` | Done | Circular chunk buffer (100 chunks = ~1s). Pre-serializes payloads on push. `getChunksAfter(seq)` for polling. `reset()` on process restart. |
-| **Audio API** | `server/audio-api.ts` | Done | Hono routes: `GET /api/v1/audio/init` (format params, 503 if not ready, 404 if disabled), `GET /api/v1/audio/chunks?after=N` (binary PCM chunks). |
-| **KPM Manager** | `server/kpm.ts` | Done | `KpmManager` singleton. Spawns `live-kpm.app.exe --batch-interval 50`, wires stdout through JSON line parser into `KpmCalculator`. Stderr forwarding via grouped log system. Always enabled. |
-| **KPM Protocol** | `server/kpm-protocol.ts` | Done | JSON line parser. Accumulates text, splits on `\n`, parses `{ t, c }` objects. |
-| **KPM Calculator** | `server/kpm-buffer.ts` | Done | `KpmCalculator` class. 5-second sliding window, ring buffer, extrapolates to KPM. No peak tracking (frontend handles it). |
-| **KPM API** | `server/kpm-api.ts` | Done | Hono route: `GET /api/v1/kpm` → `{ kpm: number }`. Returns 404 if process not running. |
-
-### Completed (Frontend — React + Hono RPC)
+### Completed (Frontend — React + plain fetch)
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **API Client** | `frontend/src/api.ts` | Done | Typed Hono RPC client via `hc<ApiType>("/api/v1/streams")`. Imports server route type for end-to-end type safety. |
-| **Strings API Client** | `frontend/src/strings-api.ts` | Done | Typed Hono RPC client via `hc<StringsApiType>("/api/v1/strings")`. Same pattern as `api.ts`. |
+| **API Client** | `frontend/src/api.ts` | Done | Plain `fetch()` wrapper — `fetchStreams()` returns typed `StreamInfo[]`. No Hono RPC dependency (removed during RIIR). |
+| **Strings API Client** | `frontend/src/strings-api.ts` | Done | Plain `fetch()` wrapper — `fetchStrings()` returns `Record<string, string>`. |
 | **Stream Status** | `frontend/src/streams.ts` | Done | `useStreamStatus()` hook. Polls `GET /api/v1/streams` every 2s, returns `{ hasMain, hasYouTubeMusic }` booleans for UI visibility. |
 | **String Store Hook** | `frontend/src/strings.ts` | Done | `useStrings()` hook. Polls `GET /api/v1/strings` every 2s, returns `Record<string, string>` of all key-value pairs. |
 | **App** | `frontend/src/app.tsx` | Done | Pure viewer shell. JetBrains Islands dark theme. Hardcoded `streamId="main"` and `streamId="youtube-music"`. YouTube Music island shown/hidden via `useStreamStatus()`. Displays server-managed strings by well-known ID (e.g. `"marquee"` in scrolling top banner, `"message"` in sidebar). SidePanel hosts Clock, Mode, Capture, message area, and About widgets. No control buttons — all lifecycle is server-managed. |
 | **Widgets** | `frontend/src/widgets/index.tsx` | Done | All widgets in one file: `ClockWidget` (dual timezone), `LiveModeWidget` (`$liveMode`, small), `CaptureWidget` (capture mode + window title, large), `AboutWidget` (revision timestamp + credits, large). Shared `LiveWidget` base in `widgets/common.tsx`. |
 | **Entry Point** | `frontend/index.tsx` | Done | React 19 `createRoot()` (migrated from Preact). |
-| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` alias. |
+| **Vite Config** | `frontend/vite.config.ts` | Done | `@vitejs/plugin-react-swc` + `@tailwindcss/vite`, `root: "."`, `@` alias. Dev proxy: `/api/*` → `http://localhost:${LIVE_CORE_PORT}`. |
 
 ---
 
@@ -601,13 +618,13 @@ The frontend polls this at ~150ms and computes peak hold + decay locally for smo
 
 ## Encoding Pipeline Reference
 
-### Format Converter (`core/live-capture/src/converter.rs`)
+### Format Converter (`live-video/src/converter.rs`)
 
 GPU-accelerated BGRA→NV12 conversion via `ID3D11VideoProcessor`. Hardware H.264 encoders require NV12 input.
 
 Performance: ~0.5-1ms for 1920x1200.
 
-### H.264 Encoder (`core/live-capture/src/encoder.rs`)
+### H.264 Encoder (`live-video/src/encoder.rs`)
 
 Async Media Foundation Transform (MFT). Runs a blocking event loop:
 
@@ -618,7 +635,7 @@ NAL unit types: SPS(7) ~27B, PPS(8) ~8B, IDR(5) ~67KB, NonIDR(1) ~1.5-30KB.
 
 ### "Bakery Model" (Capture Thread ↔ Encoding Thread)
 
-Within `live-capture.exe`, the capture thread (main) and encoding thread share a staging texture ("the shelf"). The capture thread continuously restocks it with the latest captured frame; the encoding thread reads at a constant 60fps. No channels, no CPU copies — just a shared GPU texture with `Flush()` synchronization.
+Within `live-video.exe`, the capture thread (main) and encoding thread share a staging texture ("the shelf"). The capture thread continuously restocks it with the latest captured frame; the encoding thread reads at a constant 60fps. No channels, no CPU copies — just a shared GPU texture with `Flush()` synchronization.
 
 **Trade-off**: Encoder may encode the same frame twice if capture is slow. Acceptable for live streaming.
 
@@ -661,83 +678,68 @@ Nekomaru-LiveUI-v2/
 │
 ├── data/                            # Persisted runtime data (gitignored)
 │   ├── strings.json                 # String store key-value pairs
-│   └── selector-config.json         # Auto-selector include/exclude lists
+│   ├── strings/                     # Per-key Markdown files for multiline values
+│   └── selector-config.json         # Auto-selector preset config
 │
-├── core/
-│   ├── live-app/                    # live-app.exe — webview host (Rust, wry + nkcore/winit)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       └── main.rs              # Non-resizable 1280x800 wry webview, CLI args for URL/title/scaling
-│   │
-│   ├── live-audio/                  # live-audio.exe + live_audio lib (Rust)
-│   │   ├── Cargo.toml               # Emits both [[bin]] and [lib]
-│   │   └── src/
-│   │       ├── lib.rs               # Audio IPC protocol types + serialization
-│   │       └── main.rs              # WASAPI capture, f32→s16le, 10ms chunks → stdout
-│   │
-│   ├── live-kpm/                    # live-kpm.exe + live_kpm lib (Rust)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs               # JSON line protocol types + serialization
-│   │       └── main.rs              # WH_KEYBOARD_LL hook, message pump, batch writer
-│   │
-│   ├── live-capture/                # live-capture.exe + live_capture lib (Rust)
-│   │   ├── Cargo.toml               # Emits both [[bin]] and [lib]
-│   │   └── src/
-│   │       ├── lib.rs               # IPC protocol types + serialization (public API)
-│   │       ├── main.rs              # CLI args (resample vs crop mode), capture → encode → stdout
-│   │       ├── d3d11.rs             # D3D11 device + texture/view creation helpers
-│   │       ├── capture.rs           # Capture wrapper, viewport calc, CropBox (absolute coordinates)
-│   │       ├── converter.rs         # NV12Converter (BGRA→NV12, GPU, parameterized)
-│   │       ├── encoder.rs           # H264Encoder (async MFT, NAL parsing)
-│   │       ├── encoder/
-│   │       │   ├── helper.rs        # Encoder enumeration (NVIDIA preference)
-│   │       │   └── debug.rs         # Media type logging utilities
-│   │       ├── resample.rs          # BGRA scaling shader
-│   │       └── resample.hlsl        # Fullscreen triangle vertex/pixel shaders
-│   │
-│   └── live-control/                # live-control.exe — control panel (Rust, eframe/egui)
-│       ├── Cargo.toml
-│       └── src/
-│           ├── main.rs              # Entry point, reads LIVE_PORT env, launches eframe window
-│           ├── app.rs               # ControlApp: egui UI (stream overview, auto-selector config, string store)
-│           ├── client.rs            # Blocking reqwest wrapper (1s timeout, one method per endpoint)
-│           └── model.rs             # Serde types mirroring server JSON responses
+├── live-server/                     # HTTP server (Rust, Axum + tokio)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs                  # Entry point: Axum, CLI args, Vite child, signal handling
+│       ├── state.rs                 # AppState (Arc<RwLock<...>> per subsystem)
+│       ├── video/                   # Video capture pipeline
+│       │   ├── buffer.rs            # Circular frame buffer (keyframe gating, pre-serialization)
+│       │   ├── process.rs           # StreamRegistry, spawn live-video, protocol parsing
+│       │   └── routes.rs            # /api/v1/streams CRUD, /frames, /init
+│       ├── audio/                   # Audio capture pipeline
+│       │   ├── buffer.rs            # Circular audio chunk buffer
+│       │   ├── process.rs           # AudioState, spawn live-audio, protocol parsing
+│       │   └── routes.rs            # /api/v1/audio/init, /chunks (delta + gzip)
+│       ├── kpm/                     # KPM pipeline
+│       │   ├── calculator.rs        # Sliding window KPM calculator (5s window)
+│       │   ├── process.rs           # KpmState, spawn live-kpm, binary reader
+│       │   └── routes.rs            # /api/v1/kpm
+│       ├── selector/                # Auto window selector
+│       │   ├── config.rs            # Preset parsing, pattern matching, persistence
+│       │   ├── manager.rs           # Foreground polling, stream replacement
+│       │   └── routes.rs            # /api/v1/streams/auto, /auto/config
+│       ├── ytm/                     # YouTube Music manager
+│       │   └── manager.rs           # Window polling, crop stream management
+│       ├── strings/                 # String store
+│       │   ├── store.rs             # Map + computed strings + dual-layer persistence
+│       │   └── routes.rs            # /api/v1/strings CRUD
+│       └── windows.rs               # /api/v1/streams/windows (library call)
+│
+├── live-video/                      # live-video.exe + live_video lib (was live-capture)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs                   # Video IPC protocol (reused by live-server)
+│       ├── main.rs                  # CLI: resample vs crop mode, capture → encode → stdout
+│       ├── d3d11.rs, capture.rs, converter.rs, encoder.rs, resample.rs
+│       └── encoder/                 # NVENC helpers
+│
+├── live-audio/                      # live-audio.exe + live_audio lib
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs                   # Audio IPC protocol (reused by live-server)
+│       └── main.rs                  # WASAPI capture, f32→s16le, 10ms chunks → stdout
+│
+├── live-kpm/                        # live-kpm.exe + live_kpm lib
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs                   # Binary IPC protocol (12-byte fixed messages)
+│       └── main.rs                  # WH_KEYBOARD_LL hook, message pump, binary batch writer
+│
+├── live-app/                        # Webview host (wry)
+│   ├── Cargo.toml
+│   └── src/main.rs
 │
 ├── crates/
-│   └── enumerate-windows/           # Window enumeration helper crate
-│       ├── Cargo.toml
-│       └── src/
-│           └── lib.rs               # enumerate_windows() + get_foreground_window()
-│
-├── server/                          # LiveServer — HTTP server (TypeScript, Hono on Bun)
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── biome.json                   # Biome formatter/linter config
-│   ├── index.ts                     # Entry point: Hono + Vite on single node:http port, auto-starts managers
-│   ├── common.ts                    # Constants (port, exe path, buffer capacity, data dir)
-│   ├── log.ts                       # Structured logging (markers, alignment, Rust stderr forwarding, debug gating)
-│   ├── api.ts                       # Hono routes for /api/v1/streams/* (exports ApiType for frontend RPC)
-│   ├── process.ts                   # Spawn/manage live-capture.exe (generation counter, replace in-place)
-│   ├── buffer.ts                    # Per-stream circular frame buffer + SPS/PPS cache + reset()
-│   ├── protocol.ts                  # Incremental binary wire protocol parser
-│   ├── persist.ts                   # JSON file persistence utility (loadJson/saveJson, creates data/)
-│   ├── selector.ts                  # Auto window selector (replaces "main" stream on foreground change)
-│   ├── youtube-music.ts             # YouTube Music manager (manages "youtube-music" crop stream)
-│   ├── strings.ts                   # String store: Map<string,string> + Hono routes, persisted to data/
-│   ├── audio.ts                     # Audio manager (spawns live-audio.exe, reads stdout)
-│   ├── audio-protocol.ts            # Incremental binary parser for audio IPC messages
-│   ├── audio-buffer.ts              # Circular audio chunk buffer (100 chunks, pre-serialized)
-│   ├── audio-api.ts                 # Hono routes for /api/v1/audio/* (init, chunks)
-│   ├── kpm.ts                       # KPM manager (spawns live-kpm.exe, reads stdout)
-│   ├── kpm-protocol.ts              # JSON line parser for KPM batches
-│   ├── kpm-buffer.ts                # Sliding window KPM calculator (5s window)
-│   └── kpm-api.ts                   # Hono route for /api/v1/kpm
+│   └── enumerate-windows/           # Window enumeration helper crate (used as library by live-server)
 │
 └── frontend/                        # Frontend (React + Vite + Tailwind)
     ├── package.json
     ├── tsconfig.json
-    ├── vite.config.ts               # Vite root = ., alias: @→src
+    ├── vite.config.ts               # Vite, @→src alias, /api proxy to live-server
     ���── biome.json                   # Biome formatter/linter config
     ├── index.html
     ├── index.tsx                    # Entry point (React 19 createRoot)
@@ -745,8 +747,8 @@ Nekomaru-LiveUI-v2/
     ├── global.tailwind.css          # Tailwind base import
     ├── debug.ts                     # Debug flags
     ├── src/                         # Application source (aliased as @/)
-    │   ├── api.ts                   # Hono RPC client (imports ApiType from server)
-    │   ├── strings-api.ts           # Hono RPC client for /api/v1/strings (imports StringsApiType)
+    │   ├── api.ts                   # Plain fetch() wrapper for /api/v1/streams
+    │   ├── strings-api.ts           # Plain fetch() wrapper for /api/v1/strings
     │   ├── app.tsx                  # Pure viewer shell (streams + server-managed strings by ID)
     │   ├── streams.ts               # useStreamStatus() hook (polls availability for UI visibility)
     │   ├── strings.ts               # useStrings() hook (polls /api/v1/strings every 2s)
