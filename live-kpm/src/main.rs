@@ -145,8 +145,8 @@ unsafe extern "system" fn keyboard_hook_proc(
 
 // ── Writer Thread ────────────────────────────────────────────────────────────
 
-/// Timer loop that reads the atomic counter, resets it, and writes a JSON
-/// batch line to stdout.  Exits on broken pipe or shutdown signal.
+/// Timer loop that reads the atomic counter, resets it, and writes a 12-byte
+/// binary batch to stdout.  Exits on broken pipe or shutdown signal.
 fn writer_loop(interval: Duration) {
     let mut writer = BufWriter::new(std::io::stdout().lock());
 

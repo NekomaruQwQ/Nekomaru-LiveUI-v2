@@ -1322,8 +1322,6 @@ dependencies = [
  "clap",
  "log",
  "pretty_env_logger",
- "serde",
- "serde_json",
  "windows 0.62.2",
 ]
 
@@ -1337,6 +1335,7 @@ dependencies = [
  "enumerate-windows",
  "flate2",
  "live-audio",
+ "live-kpm",
  "live-video",
  "log",
  "pretty_env_logger",

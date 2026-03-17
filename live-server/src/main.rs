@@ -11,6 +11,7 @@
 //! ```
 
 mod audio;
+mod kpm;
 mod state;
 mod strings;
 mod video;
@@ -59,6 +60,10 @@ struct Cli {
     /// during localhost development.
     #[arg(long, env = "LIVE_AUDIO")]
     audio: bool,
+
+    /// Path to the `live-kpm` executable.
+    #[arg(long, default_value = "live-kpm")]
+    kpm_exe: String,
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -75,8 +80,10 @@ async fn main() {
     // Resolve exe paths: if relative, look next to this binary.
     let video_exe = resolve_sibling_exe(&cli.video_exe);
     let audio_exe = resolve_sibling_exe(&cli.audio_exe);
+    let kpm_exe = resolve_sibling_exe(&cli.kpm_exe);
     log::info!("video exe: {video_exe}");
     log::info!("audio exe: {audio_exe}");
+    log::info!("kpm exe: {kpm_exe}");
 
     let state = Arc::new(AppState::new(video_exe));
 
@@ -86,8 +93,15 @@ async fn main() {
         state.audio_mut().await.start(&audio_exe, &cli.audio_device, &audio_arc);
     }
 
+    // Start KPM capture (always enabled).
+    {
+        let kpm_arc = state.kpm_arc();
+        state.kpm_mut().await.start(&kpm_exe, &kpm_arc);
+    }
+
     let app = Router::new()
         .merge(audio::routes::router())
+        .merge(kpm::routes::router())
         .merge(strings::routes::router())
         .merge(video::routes::router())
         .merge(windows::router())
