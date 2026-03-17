@@ -44,4 +44,4 @@ declare global {
     }
 }
 
-(globalThis as any).__DEBUG__ = DEBUG;
+window.__DEBUG__ = DEBUG;

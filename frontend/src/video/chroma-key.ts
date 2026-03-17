@@ -74,12 +74,16 @@ export class ChromaKeyRenderer {
         this.program = createProgram(gl, VERT_SRC, FRAG_SRC)
 
         // ── Empty VAO (vertex positions computed from gl_VertexID) ────────
-        this.vao = gl.createVertexArray()!
+        const vao = gl.createVertexArray()
+        if (!vao) throw new Error("ChromaKeyRenderer: failed to create VAO")
+        this.vao = vao
         gl.bindVertexArray(this.vao)
         gl.bindVertexArray(null)
 
         // ── Texture for video frames ─────────────────────────────────────
-        this.texture = gl.createTexture()!
+        const texture = gl.createTexture()
+        if (!texture) throw new Error("ChromaKeyRenderer: failed to create texture")
+        this.texture = texture
         gl.bindTexture(gl.TEXTURE_2D, this.texture)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
@@ -87,6 +91,7 @@ export class ChromaKeyRenderer {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 
         // ── Upload uniforms ──────────────────────────────────────────────
+        // biome-ignore lint/correctness/useHookAtTopLevel: gl.useProgram is a WebGL method, not a React hook
         gl.useProgram(this.program)
         gl.uniform1i(gl.getUniformLocation(this.program, "u_texture"), 0)
         gl.uniform3f(
@@ -115,6 +120,7 @@ export class ChromaKeyRenderer {
         frame.close()
 
         // Draw fullscreen triangle.
+        // biome-ignore lint/correctness/useHookAtTopLevel: gl.useProgram is a WebGL method, not a React hook
         gl.useProgram(this.program)
         gl.bindVertexArray(this.vao)
         gl.drawArrays(gl.TRIANGLES, 0, 3)
@@ -131,7 +137,8 @@ export class ChromaKeyRenderer {
 // ── WebGL helpers ────────────────────────────────────────────────────────────
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
-    const shader = gl.createShader(type)!
+    const shader = gl.createShader(type)
+    if (!shader) throw new Error(`Failed to create shader (type=${type})`)
     gl.shaderSource(shader, source)
     gl.compileShader(shader)
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
@@ -145,7 +152,8 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
 function createProgram(gl: WebGL2RenderingContext, vertSrc: string, fragSrc: string): WebGLProgram {
     const vert = compileShader(gl, gl.VERTEX_SHADER, vertSrc)
     const frag = compileShader(gl, gl.FRAGMENT_SHADER, fragSrc)
-    const program = gl.createProgram()!
+    const program = gl.createProgram()
+    if (!program) throw new Error("Failed to create WebGL program")
     gl.attachShader(program, vert)
     gl.attachShader(program, frag)
     gl.linkProgram(program)

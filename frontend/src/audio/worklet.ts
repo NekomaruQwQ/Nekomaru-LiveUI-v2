@@ -76,6 +76,7 @@ class PcmWorkletProcessor extends AudioWorkletProcessor {
 
         // Convert s16le → f32 and write to ring buffer.
         for (let i = 0; i < samples.length; i++) {
+            // biome-ignore lint/style/noNonNullAssertion: index bounded by samples.length
             this.ring[this.writePos] = samples[i]! / 32768;
             this.writePos = (this.writePos + 1) % capacity;
             this.buffered++;
@@ -87,6 +88,7 @@ class PcmWorkletProcessor extends AudioWorkletProcessor {
         if (!output || output.length === 0) return true;
 
         const channels = output.length;
+        // biome-ignore lint/style/noNonNullAssertion: output[0] guaranteed by length check above
         const frameCount = output[0]!.length; // typically 128
         const capacity = RING_CAPACITY_FRAMES * this.channels;
 
@@ -98,6 +100,7 @@ class PcmWorkletProcessor extends AudioWorkletProcessor {
             } else {
                 // Fill output with silence while pre-buffering.
                 for (let ch = 0; ch < channels; ch++) {
+                    // biome-ignore lint/style/noNonNullAssertion: ch bounded by output.length
                     output[ch]!.fill(0);
                 }
                 return true;
@@ -108,6 +111,7 @@ class PcmWorkletProcessor extends AudioWorkletProcessor {
             if (this.buffered >= channels) {
                 // Read one interleaved frame from the ring.
                 for (let ch = 0; ch < channels; ch++) {
+                    // biome-ignore lint/style/noNonNullAssertion: ch bounded by output.length, readPos bounded by capacity
                     output[ch]![frame] = this.ring[this.readPos]!;
                     this.readPos = (this.readPos + 1) % capacity;
                     this.buffered--;
@@ -115,6 +119,7 @@ class PcmWorkletProcessor extends AudioWorkletProcessor {
             } else {
                 // Underrun — output silence.
                 for (let ch = 0; ch < channels; ch++) {
+                    // biome-ignore lint/style/noNonNullAssertion: ch bounded by output.length
                     output[ch]![frame] = 0;
                 }
             }

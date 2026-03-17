@@ -33,13 +33,13 @@ function ClockComponent({ timeZone, label, variant = undefined }: {
         return () => clearInterval(id);
     }, [format]);
 
-    let hours = parseInt(time.split(":")[0]!, 10);
-    hours = hours % 12 || 12; // Convert to 12-hour format, treating 0 as 12
-    const iconName = `clock-${hours}`;
+    type ClockHour = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+    const hours = (parseInt(time.split(":")[0] ?? "0", 10) % 12 || 12) as ClockHour;
+    const iconName = `clock-${hours}` as const;
 
     return <LiveWidget
         name={label}
-        icon={<DynamicIcon name={iconName as any} size={40} />}
+        icon={<DynamicIcon name={iconName} size={40} />}
         className={variant === "secondary" ? "opacity-50" : ""}>
         <span className="text-2xl">{time}</span>
     </LiveWidget>;
