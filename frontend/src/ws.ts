@@ -1,104 +1,8 @@
-// Shared WebSocket connection helper with auto-reconnect.
+// Low-level WebSocket helpers for binary streaming (video, audio).
 //
-// Manages the WebSocket lifecycle: connect, receive messages, and reconnect
-// with exponential backoff on disconnect/error.  Tied to an AbortSignal for
+// Provides `openWebSocket` (promise-based connect) and `wsMessages`
+// (async generator yielding ArrayBuffer).  Tied to AbortSignal for
 // clean teardown (React effect cleanup, component unmount, etc.).
-
-/// Options for `connectWs`.
-export interface WsOptions {
-    /// WebSocket URL path (e.g. "/api/v1/ws/video/main").
-    /// Automatically resolved to a full `ws://` or `wss://` URL.
-    path: string;
-
-    /// Called for each binary message (frames, audio chunks).
-    onBinaryMessage?: (data: ArrayBuffer) => void;
-
-    /// Called for each text message (JSON — KPM, strings).
-    onTextMessage?: (data: string) => void;
-
-    /// Called when the connection opens.  Use this to send an initial cursor
-    /// message (e.g. `{"after": N}`).
-    onOpen?: (ws: WebSocket) => void;
-
-    /// AbortSignal for teardown — when aborted, the WS closes and no
-    /// reconnection is attempted.
-    signal: AbortSignal;
-}
-
-/// Connect a WebSocket with auto-reconnect and exponential backoff.
-///
-/// Returns immediately — the connection and reconnect loop run in the
-/// background.  Call `signal.abort()` (via AbortController) to stop.
-export function connectWs(opts: WsOptions): void {
-    // Run the async reconnect loop without awaiting — fire and forget.
-    void reconnectLoop(opts);
-}
-
-/// Build a full WebSocket URL from a path, inheriting the page's host and
-/// protocol (`ws:` for `http:`, `wss:` for `https:`).
-function buildWsUrl(path: string): string {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${location.host}${path}`;
-}
-
-async function reconnectLoop(opts: WsOptions): Promise<void> {
-    const INITIAL_DELAY_MS = 100;
-    const MAX_DELAY_MS = 5000;
-    let delay = INITIAL_DELAY_MS;
-
-    while (!opts.signal.aborted) {
-        try {
-            await runOneConnection(opts);
-        } catch {
-            // Connection failed or errored — fall through to backoff.
-        }
-
-        if (opts.signal.aborted) break;
-
-        // Exponential backoff before reconnecting.
-        await sleep(delay);
-        delay = Math.min(delay * 2, MAX_DELAY_MS);
-    }
-}
-
-/// Open a single WebSocket connection and process messages until it closes.
-function runOneConnection(opts: WsOptions): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        if (opts.signal.aborted) { resolve(); return; }
-
-        const url = buildWsUrl(opts.path);
-        const ws = new WebSocket(url);
-        ws.binaryType = "arraybuffer";
-
-        // Close on abort signal.
-        const onAbort = () => ws.close();
-        opts.signal.addEventListener("abort", onAbort, { once: true });
-
-        ws.onopen = () => {
-            opts.onOpen?.(ws);
-        };
-
-        ws.onmessage = (ev: MessageEvent) => {
-            if (ev.data instanceof ArrayBuffer) {
-                opts.onBinaryMessage?.(ev.data);
-            } else if (typeof ev.data === "string") {
-                opts.onTextMessage?.(ev.data);
-            }
-        };
-
-        ws.onclose = () => {
-            opts.signal.removeEventListener("abort", onAbort);
-            resolve();
-        };
-
-        ws.onerror = () => {
-            opts.signal.removeEventListener("abort", onAbort);
-            reject(new Error("WebSocket error"));
-        };
-    });
-}
-
-// ── Low-level helpers for async WS usage ─────────────────────────────────
 
 /// Open a WebSocket and wait for the connection to be established.
 /// Rejects on error or abort.
@@ -159,8 +63,4 @@ export async function* wsMessages(
     } finally {
         signal.removeEventListener("abort", onAbort);
     }
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -1,12 +1,11 @@
 // KPM (keystrokes-per-minute) meter component.
 //
-// Polls GET /api/v1/kpm at ~150ms for the current KPM value, computes
+// Receives KPM values via WebSocket push from /api/v1/ws/kpm, computes
 // peak hold + decay on the frontend for smooth animation, and renders
 // a vertical VU-style meter in the ActionPanel.
 
 import { useState, useEffect, useRef } from "react";
 import { KeyboardIcon } from "lucide-react";
-import { connectWs } from "./ws";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,37 +41,103 @@ function useKpm(): KpmState | null {
     useEffect(() => {
         const abort = new AbortController();
 
-        connectWs({
-            path: "/api/v1/ws/kpm",
-            signal: abort.signal,
-            onTextMessage(text) {
-                const data = JSON.parse(text) as { kpm: number | null };
-                if (data.kpm == null) { setState(null); return; }
+        void kpmWsLoop(abort.signal, (kpm) => {
+            if (kpm == null) { setState(null); return; }
 
-                const now = performance.now();
-                const kpm = data.kpm;
+            const now = performance.now();
 
-                // Update peak hold.
-                if (kpm >= peakRef.current) {
-                    peakRef.current = kpm;
-                    peakTimeRef.current = now;
-                } else {
-                    const elapsed = now - peakTimeRef.current;
-                    if (elapsed > PEAK_HOLD_MS) {
-                        const decayProgress = Math.min(
-                            (elapsed - PEAK_HOLD_MS) / PEAK_DECAY_MS, 1);
-                        peakRef.current = peakRef.current + (kpm - peakRef.current) * decayProgress;
-                    }
+            // Update peak hold.
+            if (kpm >= peakRef.current) {
+                peakRef.current = kpm;
+                peakTimeRef.current = now;
+            } else {
+                const elapsed = now - peakTimeRef.current;
+                if (elapsed > PEAK_HOLD_MS) {
+                    const decayProgress = Math.min(
+                        (elapsed - PEAK_HOLD_MS) / PEAK_DECAY_MS, 1);
+                    peakRef.current = peakRef.current + (kpm - peakRef.current) * decayProgress;
                 }
+            }
 
-                setState({ kpm, peak: Math.round(peakRef.current) });
-            },
+            setState({ kpm, peak: Math.round(peakRef.current) });
         });
 
         return () => abort.abort();
     }, []);
 
     return state;
+}
+
+// ── WebSocket reconnect loop ────────────────────────────────────────────────
+
+const INITIAL_DELAY_MS = 100;
+const MAX_DELAY_MS = 5000;
+
+/// Connect to the KPM WebSocket with auto-reconnect and exponential backoff.
+/// Calls `onValue` for each received KPM update (null = process not running).
+async function kpmWsLoop(
+    signal: AbortSignal,
+    onValue: (kpm: number | null) => void,
+): Promise<void> {
+    let delay = INITIAL_DELAY_MS;
+
+    while (!signal.aborted) {
+        try {
+            const connected = await runOneKpmConnection(signal, onValue);
+            // Reset backoff on successful connection (the WS opened and
+            // eventually closed normally — not a connection failure).
+            if (connected) delay = INITIAL_DELAY_MS;
+        } catch {
+            // Connection failed — fall through to backoff.
+        }
+
+        if (signal.aborted) break;
+        await sleep(delay);
+        delay = Math.min(delay * 2, MAX_DELAY_MS);
+    }
+}
+
+/// Open a single WS connection to /api/v1/ws/kpm and process messages.
+/// Returns true if the connection was successfully established (for backoff
+/// reset), false if it failed before opening.
+function runOneKpmConnection(
+    signal: AbortSignal,
+    onValue: (kpm: number | null) => void,
+): Promise<boolean> {
+    return new Promise<boolean>((resolve, reject) => {
+        if (signal.aborted) { resolve(false); return; }
+
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(`${proto}//${location.host}/api/v1/ws/kpm`);
+
+        const onAbort = () => ws.close();
+        signal.addEventListener("abort", onAbort, { once: true });
+
+        ws.onopen = () => {
+            // Connection established — messages will flow until close.
+        };
+
+        ws.onmessage = (ev: MessageEvent) => {
+            if (typeof ev.data === "string") {
+                const data = JSON.parse(ev.data) as { kpm: number | null };
+                onValue(data.kpm);
+            }
+        };
+
+        ws.onclose = () => {
+            signal.removeEventListener("abort", onAbort);
+            resolve(true);
+        };
+
+        ws.onerror = () => {
+            signal.removeEventListener("abort", onAbort);
+            reject(new Error("WebSocket error"));
+        };
+    });
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ── Height mapping ───────────────────────────────────────────────────────────

@@ -37,7 +37,6 @@ mod selector {
 mod strings {
     pub mod routes;
     pub mod store;
-    pub mod ws;
 }
 
 mod video {
@@ -153,7 +152,6 @@ async fn main() {
         // WebSocket routes.
         .merge(audio::ws::router())
         .merge(kpm::ws::router())
-        .merge(strings::ws::router())
         .merge(video::ws::router())
         .with_state(Arc::clone(&state));
 

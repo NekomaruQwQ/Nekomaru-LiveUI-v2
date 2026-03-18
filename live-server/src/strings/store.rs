@@ -10,8 +10,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use tokio::sync::watch;
-
 use crate::constant::DATA_DIR;
 
 /// Path to the JSON string store file.
@@ -27,10 +25,6 @@ pub struct StringStore {
     user: BTreeMap<String, String>,
     /// Server-derived readonly strings (`$`-prefixed), in-memory only.
     computed: BTreeMap<String, String>,
-    /// Monotonic version counter — bumped on every mutation.  WebSocket
-    /// handlers watch this to push full snapshots on change.
-    pub notify: watch::Sender<u64>,
-    version: u64,
 }
 
 impl StringStore {
@@ -38,21 +32,12 @@ impl StringStore {
         // Ensure data directories exist.
         let _ = std::fs::create_dir_all(strings_dir_path());
 
-        let (notify, _) = watch::channel(0u64);
         let mut store = Self {
             user: BTreeMap::new(),
             computed: BTreeMap::new(),
-            notify,
-            version: 0,
         };
         store.load_from_disk();
         store
-    }
-
-    /// Bump the version counter and notify watchers.
-    fn bump_version(&mut self) {
-        self.version += 1;
-        self.notify.send_replace(self.version);
     }
 
     /// All entries merged: user store + computed (computed wins on conflict).
@@ -84,7 +69,6 @@ impl StringStore {
             save_to_json(key, value);
         }
 
-        self.bump_version();
         Ok(())
     }
 
@@ -101,7 +85,6 @@ impl StringStore {
         remove_from_json(key);
         let _ = std::fs::remove_file(strings_dir_path().join(format!("{key}.md")));
 
-        self.bump_version();
         Ok(())
     }
 
@@ -109,20 +92,17 @@ impl StringStore {
     pub fn set_computed(&mut self, key: &str, value: String) {
         debug_assert!(key.starts_with('$'), "computed key must start with $");
         self.computed.insert(key.to_owned(), value);
-        self.bump_version();
     }
 
     /// Remove a computed string.
     pub fn clear_computed(&mut self, key: &str) {
         self.computed.remove(key);
-        self.bump_version();
     }
 
     /// Reload all user strings from disk (called by `POST /refresh`).
     pub fn reload(&mut self) {
         self.user.clear();
         self.load_from_disk();
-        self.bump_version();
         log::info!("reloaded {} user string entries", self.user.len());
     }
 

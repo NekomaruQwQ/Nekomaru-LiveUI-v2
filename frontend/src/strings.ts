@@ -1,34 +1,40 @@
-// WebSocket hook for the server-managed string store.
+// Polling hook for the server-managed string store.
 //
-// Connects to /api/v1/ws/strings and receives full JSON snapshots whenever
-// any value changes.  Used by app.tsx to display well-known string IDs at
-// designated locations in the layout (e.g. "test" in the sidebar).
+// Polls GET /api/v1/strings every 2 seconds and returns all key-value pairs.
+// Used by app.tsx to display well-known string IDs at designated locations
+// in the layout (e.g. "marquee" in the scrolling top banner).
 
 import { useEffect, useState } from "react";
 
-import { connectWs } from "./ws";
+import { fetchStrings } from "./strings-api";
+
+const POLL_INTERVAL_MS = 2000;
 
 /// Returns all server-managed strings as a key-value record.
-/// Updates are pushed by the server immediately on change.
+/// Polls every 2s — updates are reflected within one interval.
 export function useStrings(): Record<string, string> {
     const [strings, setStrings] = useState<Record<string, string>>({});
 
     useEffect(() => {
-        const abort = new AbortController();
+        let cancelled = false;
 
-        connectWs({
-            path: "/api/v1/ws/strings",
-            signal: abort.signal,
-            onTextMessage(text) {
-                try {
-                    setStrings(JSON.parse(text) as Record<string, string>);
-                } catch (e) {
-                    console.error("Failed to parse strings WS message:", e);
-                }
-            },
-        });
+        async function poll() {
+            if (cancelled) return;
+            try {
+                const data = await fetchStrings();
+                if (!cancelled) setStrings(data);
+            } catch (e) {
+                console.error("Failed to poll strings:", e);
+            }
+        }
 
-        return () => abort.abort();
+        poll();
+        const intervalId = setInterval(poll, POLL_INTERVAL_MS);
+
+        return () => {
+            cancelled = true;
+            clearInterval(intervalId);
+        };
     }, []);
 
     return strings;
