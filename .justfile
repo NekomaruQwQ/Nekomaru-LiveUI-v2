@@ -7,7 +7,7 @@ alias i := install
 list:
     just --list
 install:
-    cargo build;
+    cargo build --release;
     cd frontend; bun i;
 refresh:
     http post $"{{base_url}}/api/v1/refresh" ""
@@ -15,8 +15,8 @@ capture name:
     http put $"{{base_url}}/api/v1/streams/auto/config/preset" "{{name}}"
 
 server *args:
-    cargo build
-    cargo run -p live-server -- {{args}}
+    cargo build --release
+    cargo run --release -p live-server -- {{args}}
 app *args:
     use .mod.nu run-app; \
     run-app app \

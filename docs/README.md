@@ -133,7 +133,8 @@ The server was originally TypeScript (Hono on Bun).  It was rewritten in Rust fo
 | Frame format (server→browser) | AVCC (server pre-serialized) | The server converts Annex B → AVCC at frame-push time (strip start codes, add 4-byte BE length prefix per NAL).  The frontend feeds AVCC payloads directly to `EncodedVideoChunk` with zero H.264 format knowledge — no parsing, no start code stripping, no AVCC assembly.  Codec string and avcC descriptor are also built server-side and served via `/init`. |
 | Vite integration | Spawned as child, reverse-proxied by core server | The core server is the single entry point — the browser connects to `LIVE_PORT`.  Non-API requests are reverse-proxied to Vite via `reqwest`.  HMR WebSocket connects directly to Vite (`hmr.clientPort`).  No Vite-side proxy config needed. |
 | Port configuration | `LIVE_PORT` (server, browser entry) + `LIVE_VITE_PORT` (Vite, internal) | Both required, no defaults — avoids conflicts. |
-| Webview launch | Copy-and-run via `.mod.nu` | `just app` / `just youtube-music` build `live-app`, copy as `live-app.<id>.exe`, then run the copy.  Each instance gets its own binary, so `cargo build` (server restart) doesn't hit file locks.  Instance IDs allow frontend and YTM webviews to run simultaneously. |
+| Build profile | Release by default | All `just` recipes build with `--release`. Performance matters for the low-latency capture pipeline, and we rarely attach a debugger. No separate dev-server recipe — debug builds can be run manually when needed. |
+| Webview launch | Copy-and-run via `.mod.nu` | `just app` / `just youtube-music` build `live-app` in release mode, copy as `live-app.<id>.exe`, then run the copy.  Each instance gets its own binary, so `cargo build` (server restart) doesn't hit file locks.  Instance IDs allow frontend and YTM webviews to run simultaneously. |
 
 ### Why Not a Monolith?
 
@@ -152,6 +153,10 @@ Each source file has a primary owner — **agent** (Claude) or **human** (Nekoma
 - **Human files**: Nekomaru hand-crafts with attention to visual style. Claude can work on them but changes are always reviewed and refactored.
 
 See [`FILE-OWNERSHIP.md`](../FILE-OWNERSHIP.md) for the full per-file breakdown.
+
+### Agent Rules
+
+- **Always use `--release`** when invoking `cargo build` or `cargo run`. All binaries in this project are release-built by default.
 
 ---
 
