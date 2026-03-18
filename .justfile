@@ -6,9 +6,16 @@ alias i := install
 
 list:
     just --list
+push bookmark revision="@-":
+    jj bookmark move {{bookmark}} --to={{revision}}
+    jj git push
+pull:
+    jj git fetch
+    jj git new -r main
+
 install:
-    cargo build --release;
-    cd frontend; bun i;
+    cargo build --release
+    cd frontend; bun i
 refresh:
     http post $"{{base_url}}/api/v1/refresh" ""
 capture name:
