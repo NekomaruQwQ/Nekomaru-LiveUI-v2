@@ -105,7 +105,7 @@ export function AboutWidget({ strings }: { strings: Record<string, string> }) {
                 {timestamp && <span>Build {timestamp.slice(0, 16)}</span>}
             </div>
         </LiveWidget>
-        <div>
+        <div className="px-2">
             <span className="opacity-75">Designed & Created by Nekomaru@pku.edu.cn</span>
             <span className="opacity-50">Coauthored by Claude Code</span>
         </div>
