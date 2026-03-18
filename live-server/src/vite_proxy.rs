@@ -11,7 +11,7 @@
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse as _, Response};
 
 /// Create a reqwest client and return a fallback handler bound to the
 /// given Vite dev server port.

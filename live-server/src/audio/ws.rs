@@ -79,12 +79,10 @@ async fn handle_audio_ws(
     if let Some(Ok(ws::Message::Text(text))) = tokio::time::timeout(
         std::time::Duration::from_millis(100),
         socket.recv(),
-    ).await.ok().flatten() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&*text) {
-            if let Some(n) = v.get("after").and_then(|v| v.as_u64()) {
-                last_seq = n as u32;
-            }
-        }
+    ).await.ok().flatten()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = v.get("after").and_then(serde_json::Value::as_u64) {
+        last_seq = n as u32;
     }
 
     // Initial catch-up.
@@ -102,8 +100,7 @@ async fn handle_audio_ws(
     loop {
         match rx.recv().await {
             Err(broadcast::error::RecvError::Closed) => break,
-            Err(broadcast::error::RecvError::Lagged(_)) => {}
-            Ok(()) => {}
+            Err(broadcast::error::RecvError::Lagged(_)) | Ok(()) => {}
         }
 
         let audio = audio_arc.read().await;

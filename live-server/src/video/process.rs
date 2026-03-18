@@ -341,11 +341,11 @@ fn spawn_and_wire(
                                     log::info!("@{id_owned} running (codec params received)");
                                 }
                                 // Wake WS clients so they can fetch /init params.
-                                stream.notify.send(()).ok();
+                                let _ = stream.notify.send(());
                             }
                             Message::Frame(frame) => {
                                 stream.buffer.push_frame(&frame);
-                                stream.notify.send(()).ok();
+                                let _ = stream.notify.send(());
                             }
                             Message::Error(e) => {
                                 log::error!("@{id_owned} capture error: {e}");
@@ -367,10 +367,9 @@ fn spawn_and_wire(
 
         // Mark stream as stopped — only if we still own this generation.
         let mut registry = registry_clone.blocking_write();
-        if let Some(stream) = registry.streams.get_mut(&id_owned) {
-            if stream.generation == generation {
-                stream.status = StreamStatus::Stopped;
-            }
+        if let Some(stream) = registry.streams.get_mut(&id_owned)
+            && stream.generation == generation {
+            stream.status = StreamStatus::Stopped;
         }
     });
 

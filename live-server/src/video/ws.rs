@@ -97,7 +97,9 @@ async fn handle_video_ws(
             drop(socket);
             return;
         };
-        stream.notify.subscribe()
+        let rx = stream.notify.subscribe();
+        drop(registry);
+        rx
     };
 
     // Check for an initial cursor message from the client (non-blocking).
@@ -105,12 +107,10 @@ async fn handle_video_ws(
     if let Some(Ok(ws::Message::Text(text))) = tokio::time::timeout(
         std::time::Duration::from_millis(100),
         socket.recv(),
-    ).await.ok().flatten() {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&*text) {
-            if let Some(n) = v.get("after").and_then(|v| v.as_u64()) {
-                last_seq = n as u32;
-            }
-        }
+    ).await.ok().flatten()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+        && let Some(n) = v.get("after").and_then(serde_json::Value::as_u64) {
+        last_seq = n as u32;
     }
 
     // Send an initial catch-up batch and seed `current_gen` from the stream's
@@ -138,8 +138,7 @@ async fn handle_video_ws(
         // catch up via the sequence-based buffer read.
         match rx.recv().await {
             Err(broadcast::error::RecvError::Closed) => break,
-            Err(broadcast::error::RecvError::Lagged(_)) => {}
-            Ok(()) => {}
+            Err(broadcast::error::RecvError::Lagged(_)) | Ok(()) => {}
         }
 
         let registry = streams.read().await;
