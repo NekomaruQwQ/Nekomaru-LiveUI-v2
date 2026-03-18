@@ -115,6 +115,11 @@ async fn main() {
 
     let state = Arc::new(AppState::new(video_exe, Arc::clone(&job)));
 
+    // Read revision timestamp from jj (non-fatal on failure).
+    if let Some(ts) = read_jj_timestamp() {
+        state.strings_mut().await.set_computed(constant::CSID_TIMESTAMP, ts);
+    }
+
     // Start audio capture if enabled.
     if cli.audio {
         let audio_arc = state.audio_arc();
@@ -261,6 +266,39 @@ fn spawn_vite(vite_port: u16, _core_port: u16, job: &JobObject) -> Option<Child>
         }
         Err(e) => {
             log::error!("failed to spawn vite: {e}");
+            None
+        }
+    }
+}
+
+// ── Jujutsu Timestamp ────────────────────────────────────────────────────────
+
+/// Read the committer timestamp of the `@-` revision via `jj log`.
+///
+/// Returns `None` (with a warning log) if `jj` is not available or the repo
+/// is not a jj repository.  The server continues without a timestamp.
+fn read_jj_timestamp() -> Option<String> {
+    let output = std::process::Command::new("jj")
+        .args(["log", "-r", "@-", "--no-graph", "-T", "self.committer().timestamp()"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let ts = String::from_utf8_lossy(&o.stdout).trim().to_owned();
+            if ts.is_empty() {
+                log::warn!("jj log returned empty timestamp");
+                None
+            } else {
+                log::info!("revision timestamp: {ts}");
+                Some(ts)
+            }
+        }
+        Ok(o) => {
+            log::warn!("jj log failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+            None
+        }
+        Err(e) => {
+            log::warn!("jj not available: {e}");
             None
         }
     }

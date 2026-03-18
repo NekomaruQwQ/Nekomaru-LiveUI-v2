@@ -31,6 +31,9 @@ pub const CSID_CAPTURE_MODE: &str = "$captureMode";
 /// Live mode derived from the matched pattern's `@mode` tag (e.g. `"code"`).
 pub const CSID_LIVE_MODE: &str = "$liveMode";
 
+/// Revision timestamp of the `@-` jj revision, read at server startup.
+pub const CSID_TIMESTAMP: &str = "$timestamp";
+
 // ── Capture Defaults ────────────────────────────────────────────────────────
 
 /// Default capture resolution (width).
