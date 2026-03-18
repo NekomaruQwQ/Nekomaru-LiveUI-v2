@@ -84,10 +84,6 @@ impl AppState {
 
     // ── KPM ──────────────────────────────────────────────────────────────
 
-    pub async fn kpm(&self) -> tokio::sync::RwLockReadGuard<'_, KpmState> {
-        self.kpm.read().await
-    }
-
     pub async fn kpm_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, KpmState> {
         self.kpm.write().await
     }

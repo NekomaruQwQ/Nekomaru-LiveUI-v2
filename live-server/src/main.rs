@@ -24,7 +24,6 @@ mod audio {
 mod kpm {
     pub mod calculator;
     pub mod process;
-    pub mod routes;
     pub mod ws;
 }
 
@@ -143,7 +142,6 @@ async fn main() {
     let mut app = Router::new()
         // HTTP routes.
         .merge(audio::routes::router())
-        .merge(kpm::routes::router())
         .merge(selector::routes::router())
         .merge(strings::routes::router())
         .merge(video::routes::router())

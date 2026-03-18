@@ -21,12 +21,9 @@ import { H264Decoder } from "./decoder";
  * pixels matching that color with transparency.  The entire pipeline stays on
  * the GPU — no CPU readback.
  */
-export function StreamRenderer({ streamId, chromaKey, pollMs = 16 }: {
+export function StreamRenderer({ streamId, chromaKey }: {
     streamId: string;
     chromaKey?: string;
-    /// Frame poll interval in milliseconds.  Defaults to 16 (~60 fps).
-    /// Set to 1000 for low-fps streams like YouTube Music (1 fps).
-    pollMs?: number;
 }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -63,14 +60,14 @@ export function StreamRenderer({ streamId, chromaKey, pollMs = 16 }: {
         console.log("StreamRenderer: Canvas ready: %dx%d", canvas.width, canvas.height);
 
         const abortController = new AbortController();
-        startStreamLoop(streamId, onFrame, abortController.signal, pollMs);
+        startStreamLoop(streamId, onFrame, abortController.signal);
 
         return () => {
             console.log("StreamRenderer: Component unmounting, aborting stream loop");
             abortController.abort();
             cleanup?.();
         };
-    }, [streamId, chromaKey, pollMs]);
+    }, [streamId, chromaKey]);
 
     return (
         <canvas
@@ -132,7 +129,6 @@ async function startStreamLoop(
     streamId: string,
     onFrame: (frame: VideoFrame) => void,
     signal: AbortSignal,
-    _pollMs: number,
 ): Promise<void> {
     console.log("StreamLoop: Starting stream loop");
 

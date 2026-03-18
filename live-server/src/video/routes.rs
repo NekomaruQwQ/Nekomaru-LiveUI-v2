@@ -4,17 +4,15 @@
 //! - `POST   /api/v1/streams`            — create a new capture
 //! - `DELETE /api/v1/streams/:id`        — destroy a capture
 //! - `GET    /api/v1/streams/:id/init`   — codec string + avcC descriptor
-//! - `GET    /api/v1/streams/:id/frames` — AVCC frames (binary, polling)
 
 use crate::state::AppState;
 use crate::video::buffer::{build_avcc_descriptor, build_codec_string};
 use crate::video::process::CropParams;
 
 use axum::Router;
-use axum::body::Body;
-use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Json, Response};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Json};
 use axum::routing::{delete, get};
 
 use base64::Engine as _;
@@ -27,7 +25,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/streams", get(list_streams).post(create_stream))
         .route("/api/v1/streams/{id}", delete(destroy_stream))
         .route("/api/v1/streams/{id}/init", get(get_init))
-        .route("/api/v1/streams/{id}/frames", get(get_frames))
 }
 
 // ── List ─────────────────────────────────────────────────────────────────────
@@ -124,80 +121,4 @@ async fn get_init(
         "height": height,
         "description": b64.encode(&avcc),
     })).into_response()
-}
-
-// ── Frames (binary) ──────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct FramesQuery {
-    after: Option<String>,
-}
-
-/// `GET /api/v1/streams/:id/frames?after=N` — AVCC frame data.
-///
-/// Response layout (all little-endian unless noted):
-/// ```text
-/// [u32 LE: generation][u32 LE: num_frames]
-/// per frame:
-///   [u32 LE: sequence]
-///   [u64 LE: timestamp_us]
-///   [u8:     is_keyframe]
-///   [u32 LE: avcc_payload_length]
-///   [avcc_payload bytes]          ← ready for EncodedVideoChunk.data
-/// ```
-async fn get_frames(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(query): Query<FramesQuery>,
-) -> impl IntoResponse {
-    let registry = state.streams().await;
-    let Some(stream) = registry.streams.get(&id) else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "stream not found" }))).into_response();
-    };
-
-    let after: u32 = query.after
-        .as_deref()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    let frames = stream.buffer.get_frames_after(after);
-    let generation = stream.generation;
-
-    // Pre-compute total size: 8-byte header + (17 + payload) per frame.
-    // Per-frame envelope: sequence(4) + timestamp(8) + keyframe(1) + len(4) = 17.
-    let mut total_size: usize = 8;
-    for f in &frames {
-        total_size += 17 + f.payload.len();
-    }
-
-    let mut buf = vec![0u8; total_size];
-    let mut pos = 0;
-
-    // Header: generation + frame count.
-    buf[pos..pos + 4].copy_from_slice(&generation.to_le_bytes());
-    pos += 4;
-    buf[pos..pos + 4].copy_from_slice(&(frames.len() as u32).to_le_bytes());
-    pos += 4;
-
-    // Each frame: sequence, timestamp, keyframe flag, AVCC payload.
-    for f in &frames {
-        buf[pos..pos + 4].copy_from_slice(&f.sequence.to_le_bytes());
-        pos += 4;
-        buf[pos..pos + 8].copy_from_slice(&f.timestamp_us.to_le_bytes());
-        pos += 8;
-        buf[pos] = u8::from(f.is_keyframe);
-        pos += 1;
-        buf[pos..pos + 4].copy_from_slice(&(f.payload.len() as u32).to_le_bytes());
-        pos += 4;
-        buf[pos..pos + f.payload.len()].copy_from_slice(&f.payload);
-        pos += f.payload.len();
-    }
-
-    drop(registry);
-
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .body(Body::from(buf))
-        .unwrap()
-        .into_response()
 }

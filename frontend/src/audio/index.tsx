@@ -12,7 +12,7 @@
 //   1. Create AudioContext at the device's native sample rate
 //   2. Load the PCM worklet module
 //   3. Fetch /api/v1/audio/init (retry on 503 until params arrive)
-//   4. Poll /api/v1/audio/chunks?after=N with adaptive timing
+//   4. Stream PCM chunks via WS /api/v1/ws/audio
 //   5. Post all received chunks to the worklet immediately
 //   6. Handle browser autoplay policy via user interaction resume
 
@@ -98,9 +98,8 @@ async function startAudioLoop(signal: AbortSignal): Promise<void> {
             delay = INITIAL_DELAY_MS;
 
             for await (const data of wsMessages(ws, signal)) {
-                // WS path sends raw PCM (no delta encoding, no gzip).
                 const chunks = parseBinaryChunkResponse(
-                    new Uint8Array(data), false);
+                    new Uint8Array(data));
                 for (const chunk of chunks) {
                     lastSequence = Math.max(lastSequence, chunk.sequence);
                     postChunkToWorklet(workletNode, chunk, params.channels);
@@ -168,17 +167,14 @@ interface ParsedChunk {
     pcmData: Uint8Array;
 }
 
-/// Parse the binary blob returned by the audio chunks endpoint.
+/// Parse the binary blob returned by the audio WebSocket.
 ///
 /// Layout (all little-endian):
 ///   [u32: num_chunks]
 ///   per chunk: [u32: sequence][u32: payload_length][payload bytes]
 ///
 /// Payload per chunk: [u64 LE: timestamp_us][s16le PCM bytes]
-///
-/// @param deltaEncoded  When true (HTTP path), applies delta decoding.
-///                      The WS path sends raw PCM, so pass false.
-function parseBinaryChunkResponse(buf: Uint8Array, deltaEncoded = true): ParsedChunk[] {
+function parseBinaryChunkResponse(buf: Uint8Array): ParsedChunk[] {
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let pos = 0;
 
@@ -191,28 +187,13 @@ function parseBinaryChunkResponse(buf: Uint8Array, deltaEncoded = true): ParsedC
 
         // First 8 bytes of payload = timestamp_us (u64 LE).
         const timestampUs = view.getBigUint64(pos, true);
-        // slice() creates an owned copy — safe to mutate in-place.
-        const pcmData = buf.slice(pos + 8, pos + payloadLen);
+        const pcmData = buf.subarray(pos + 8, pos + payloadLen);
         pos += payloadLen;
 
-        if (deltaEncoded) deltaDecodePcm(pcmData);
         chunks.push({ sequence, timestampUs, pcmData });
     }
 
     return chunks;
-}
-
-/// Decode delta-encoded s16le PCM samples in-place.
-/// First sample is literal; each subsequent sample accumulates the delta.
-function deltaDecodePcm(pcmData: Uint8Array): void {
-    const view = new DataView(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
-    const sampleCount = pcmData.byteLength >>> 1;
-    for (let i = 1; i < sampleCount; i++) {
-        const off = i * 2;
-        const prev = view.getInt16(off - 2, true);
-        const delta = view.getInt16(off, true);
-        view.setInt16(off, (prev + delta) | 0, true);
-    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

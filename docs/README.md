@@ -345,22 +345,6 @@ Served by `live-server` (Rust/Axum).  Port is configured via `LIVE_CORE_PORT` en
 }
 ```
 
-**`GET /api/v1/streams/:id/frames?after=N`** — AVCC-formatted frames after sequence number N. Returns `application/octet-stream` (binary, not JSON).
-
-```
-Binary layout (all little-endian):
-[u32: generation]
-[u32: num_frames]
-per frame:
-    [u32: sequence]
-    [u64: timestamp_us]
-    [u8:  is_keyframe]
-    [u32: avcc_payload_length]
-    [avcc_payload_length bytes: AVCC data]
-```
-
-The `generation` field increments each time the underlying capture process is replaced (e.g. window switch). The frontend uses this to detect replacements and reinitialize its decoder. Each frame's AVCC payload contains concatenated length-prefixed NAL units (`[u32 BE: nal_length][raw NAL data]...`) — directly feedable to `EncodedVideoChunk.data`. The Annex B → AVCC conversion (start code stripping + big-endian length prefixing) happens once at frame push time on the server. Returns JSON `{ "error": "..." }` with 404 status if the stream doesn't exist.
-
 **`GET /api/v1/streams/windows`** — List capturable windows (direct library call to `enumerate_windows::enumerate_windows()` — no child process spawn).
 
 ### Auto Window Selector
@@ -461,25 +445,13 @@ Keys prefixed with `$` are **computed strings** — readonly values derived from
 { "ok": true }
 ```
 
-### KPM
-
-**`GET /api/v1/kpm`** — Get the current keystrokes-per-minute value computed from a 5-second sliding window.
-
-```json
-{ "kpm": 234 }
-```
-
-Returns 404 if the KPM capture process is not running. Always enabled — no env gating needed (unlike audio).
-
-The HTTP endpoint is kept for backward compatibility; the frontend uses WebSocket (see below).
-
 ### WebSocket Streaming
 
-Latency-critical data is pushed over dedicated WebSocket connections, eliminating per-request TCP overhead.  Each endpoint uses the same binary format as its HTTP counterpart.  Low-frequency data (strings, stream status) remains HTTP-polled.
+Latency-critical data is pushed over dedicated WebSocket connections, eliminating per-request TCP overhead.  Low-frequency data (strings, stream status) remains HTTP-polled.
 
-**`WS /api/v1/ws/video/:id`** — Video frames (binary push).  On connect, the client may send `{"after": N}` to set its cursor; the server sends a catch-up batch, then pushes frames as they arrive via `broadcast` notification.  Same binary layout as `GET /streams/:id/frames`.
+**`WS /api/v1/ws/video/:id`** — Video frames (binary push).  On connect, the client may send `{"after": N}` to set its cursor; the server sends a catch-up batch, then pushes frames as they arrive via `broadcast` notification.  Binary layout: `[u32 generation][u32 num_frames] per frame: [u32 sequence][u64 timestamp_us][u8 is_keyframe][u32 avcc_len][avcc bytes]` (all LE).
 
-**`WS /api/v1/ws/audio`** — Audio chunks (binary push, no gzip/delta — raw PCM).  Same cursor protocol as video.  Same binary layout as `GET /audio/chunks` but without delta encoding or gzip compression.
+**`WS /api/v1/ws/audio`** — Audio chunks (binary push, raw PCM — no delta encoding or gzip).  Same cursor protocol as video.  Binary layout: `[u32 num_chunks] per chunk: [u32 sequence][u32 payload_len][payload]` where payload is `[u64 timestamp_us][s16le PCM]`.
 
 **`WS /api/v1/ws/kpm`** — KPM updates (JSON text push).  Sends `{"kpm": N}` or `{"kpm": null}` on every value change via `watch` channel.  Initial value sent immediately on connect.
 
@@ -515,8 +487,8 @@ Latency-critical data is pushed over dedicated WebSocket connections, eliminatin
 
 | Component | File | Status | Notes |
 |-----------|------|--------|-------|
-| **Decoder** | `frontend/src/video/decoder.ts` | Done | Thin WebCodecs wrapper — zero H.264 format knowledge. Server provides pre-built codec string + avcC descriptor (via `/init`) and AVCC-formatted frame payloads (via `/frames`). `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). `decodeFrame()` passes AVCC data directly to `EncodedVideoChunk` with no conversion. |
-| **Renderer** | `frontend/src/video/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering via WebSocket push. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Reinit retries in a loop on failure. Owns full decoder lifecycle via `startStreamLoop()` with auto-reconnect + exponential backoff. Uses `openWebSocket()` + `wsMessages()` async generator from `ws.ts`. `parseBinaryFrameResponse()` unchanged (same binary format as HTTP). |
+| **Decoder** | `frontend/src/video/decoder.ts` | Done | Thin WebCodecs wrapper — zero H.264 format knowledge. Server provides pre-built codec string + avcC descriptor (via `/init`) and AVCC-formatted frame payloads (via WS). `fetchInit()` retries on 503 (starting) and 404 (stream not yet created). `decodeFrame()` passes AVCC data directly to `EncodedVideoChunk` with no conversion. |
+| **Renderer** | `frontend/src/video/index.tsx` | Done | `<StreamRenderer>` component. Canvas rendering via WebSocket push. Generation-aware: reinitializes decoder when the server replaces the underlying capture process. Reinit retries in a loop on failure. Owns full decoder lifecycle via `startStreamLoop()` with auto-reconnect + exponential backoff. Uses `openWebSocket()` + `wsMessages()` async generator from `ws.ts`. |
 
 ### Completed (`live-audio` crate — `live-audio/`)
 
@@ -562,15 +534,14 @@ Replaces the former TypeScript Hono server.  All server logic is now Rust.  Modu
 | **Shared State** | `live-server/src/state.rs` | Done | `AppState` with per-subsystem `Arc<RwLock<T>>`. Accessor methods for read/write locks and cloneable `Arc` handles for child-process reader tasks. |
 | **Video Buffer** | `live-server/src/video/buffer.rs` | Done | Per-stream circular buffer (60 frames). Annex B → AVCC conversion at push time (`strip_start_code` + 4-byte BE length prefix per NAL). Keyframe gating for first client request. `build_codec_string()` / `build_avcc_descriptor()` for the `/init` endpoint — both strip start codes from `CodecParams.sps`/`.pps` (which contain raw `NALUnit.data` with Annex B prefixes). `reset()` on stream replacement. 15 unit tests. |
 | **Video Process** | `live-server/src/video/process.rs` | Done | `StreamRegistry` with `CaptureStream` entries. `spawn_and_wire()` spawns `live-video.exe` with `--stream-id`, reads stdout via `live_video::read_message()` on `spawn_blocking` thread, pushes into buffer. `broadcast::Sender<()>` per stream fires after each frame push — wakes WebSocket tasks. Generation-guarded: stale readers never touch the new generation's buffer. |
-| **Video Routes** | `live-server/src/video/routes.rs` | Done | `GET/POST /streams`, `DELETE /streams/:id`, `GET /streams/:id/init` (codec string + avcC base64), `GET /streams/:id/frames?after=N` (binary AVCC, kept for backward compat). |
+| **Video Routes** | `live-server/src/video/routes.rs` | Done | `GET/POST /streams`, `DELETE /streams/:id`, `GET /streams/:id/init` (codec string + avcC base64). |
 | **Video WebSocket** | `live-server/src/video/ws.rs` | Done | `WS /ws/video/:id` — subscribes to `broadcast`, pushes AVCC frames in same binary format as HTTP. Cursor sync via `{"after": N}` on connect. |
 | **Audio Buffer** | `live-server/src/audio/buffer.rs` | Done | Circular chunk buffer (100 chunks = ~1s). Pre-serialized payloads. Generation reset detection (stale cursor → return all). 4 unit tests. |
 | **Audio Process** | `live-server/src/audio/process.rs` | Done | `AudioState` singleton. Spawns `live-audio.exe`, reads stdout via `live_audio::read_message()`. `broadcast::Sender<()>` fires after each chunk push. Stderr inherited. Reset on process exit. |
-| **Audio Routes** | `live-server/src/audio/routes.rs` | Done | `GET /audio/init` (format params, 503/404), `GET /audio/chunks?after=N` (binary + delta encoding + gzip via `flate2`, kept for backward compat). 1 delta-encoding unit test. |
+| **Audio Routes** | `live-server/src/audio/routes.rs` | Done | `GET /audio/init` (format params, 503/404). |
 | **Audio WebSocket** | `live-server/src/audio/ws.rs` | Done | `WS /ws/audio` — pushes raw PCM chunks (no delta encoding, no gzip). Same cursor protocol as video. |
 | **KPM Calculator** | `live-server/src/kpm/calculator.rs` | Done | 5-second sliding window with `VecDeque`. Extrapolates to KPM. No peak tracking (frontend handles it). 5 unit tests. |
 | **KPM Process** | `live-server/src/kpm/process.rs` | Done | `KpmState` singleton. Spawns `live-kpm.exe`, reads 12-byte binary batches via `live_kpm::read_batch()`. `watch::Sender<Option<i64>>` updated after each batch — carries the rounded KPM value. Stderr inherited. Always enabled. |
-| **KPM Route** | `live-server/src/kpm/routes.rs` | Done | `GET /kpm` → `{ kpm: number }`. Returns 404 if process not running. Kept for backward compat. |
 | **KPM WebSocket** | `live-server/src/kpm/ws.rs` | Done | `WS /ws/kpm` — pushes `{"kpm": N}` on every `watch` change. Sends current value immediately on connect. |
 | **Selector Config** | `live-server/src/selector/config.rs` | Done | `PresetConfig` with persistence to `data/selector-config.json`. Pattern parser: `[@mode] <exePath>[@<windowTitle>]`. `should_capture()` with exclude-veto semantics. Path separator normalization. Legacy format migration. 9 unit tests. |
 | **Selector Manager** | `live-server/src/selector/manager.rs` | Done | `SelectorState`. Polls foreground window every 2s via `enumerate_windows::get_foreground_window()` (direct library call). Replaces `"main"` stream on match. Pushes `$captureInfo` (exe FileDescription, falls back to window title), `$liveMode`, `$captureMode` computed strings. |
@@ -733,17 +704,16 @@ Nekomaru-LiveUI-v2/
 │       ├── video/                   # Video capture pipeline
 │       │   ├── buffer.rs            # Circular frame buffer (Annex B→AVCC, keyframe gating, avcC builder)
 │       │   ├── process.rs           # StreamRegistry, spawn live-video, broadcast notify
-│       │   ├── routes.rs            # /api/v1/streams CRUD, /frames, /init (HTTP)
+│       │   ├── routes.rs            # /api/v1/streams CRUD, /init (HTTP)
 │       │   └── ws.rs                # WS /api/v1/ws/video/:id (binary frame push)
 │       ├── audio/                   # Audio capture pipeline
 │       │   ├── buffer.rs            # Circular audio chunk buffer
 │       │   ├── process.rs           # AudioState, spawn live-audio, broadcast notify
-│       │   ├── routes.rs            # /api/v1/audio/init, /chunks (HTTP, delta + gzip)
+│       │   ├── routes.rs            # /api/v1/audio/init (HTTP)
 │       │   └── ws.rs                # WS /api/v1/ws/audio (binary chunk push, raw PCM)
 │       ├── kpm/                     # KPM pipeline
 │       │   ├── calculator.rs        # Sliding window KPM calculator (5s window)
 │       │   ├── process.rs           # KpmState, spawn live-kpm, watch notify
-│       │   ├── routes.rs            # /api/v1/kpm (HTTP)
 │       │   └── ws.rs                # WS /api/v1/ws/kpm (JSON text push)
 │       ├── selector/                # Auto window selector
 │       │   ├── config.rs            # Preset parsing, pattern matching, persistence
