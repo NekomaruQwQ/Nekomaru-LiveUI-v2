@@ -77,10 +77,10 @@ struct Cli {
     #[arg(long, env = "LIVE_VITE_PORT")]
     vite_port: u16,
 
-    /// Enable audio capture.  Off by default to avoid feedback loops
-    /// during localhost development.
+    /// Enable audio capture (any non-zero number = on, 0 or unset = off).
+    /// Off by default to avoid feedback loops during localhost development.
     #[arg(long, env = "LIVE_AUDIO")]
-    audio: bool,
+    audio: Option<u64>,
 
     /// WASAPI capture device name for audio.
     #[arg(long, default_value = "Loopback L + R (Focusrite USB Audio)")]
@@ -121,7 +121,7 @@ async fn main() {
     }
 
     // Start audio capture if enabled.
-    if cli.audio {
+    if cli.audio.is_some_and(|v| v != 0) {
         let audio_arc = state.audio_arc();
         state.audio_mut().await.start(&audio_exe, &cli.audio_device, &job, &audio_arc);
     }
